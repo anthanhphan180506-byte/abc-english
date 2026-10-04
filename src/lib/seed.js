@@ -72,17 +72,23 @@ const Seed = {
       R.confirmed(db, c1.id).forEach((e, i) => db.attendance.push({ id: U.id('at'), sessionId: s.id, enrollmentId: e.id, studentId: e.studentId, status: (i + k) % 6 === 0 ? 'Vắng' : 'Có mặt' }));
     });
 
+    const back = (c) => db.enrollments.filter((e) => e.classId === c.id).forEach((e) => { e.createdAt = U.addDays(R.by(db, 'classes', c.id).startDate, -7); }); // ghi danh trước ngày khai giảng
+    back(c1);
+
     // 2) A2 – Hà Đông: chưa đủ sĩ số tối thiểu (để minh họa luật mở lớp)
     const c2 = Seed.klass(db, { course: 'co3', branch: 'br2', term: t0.id, sched: sched([1, 3], '18:30', '20:00', 'br2r1', 'gv4', start0) });
     for (let i = 11; i < 17; i++) { const e = R.enroll(db, S, 'hv' + (i + 1), c2.id); R.addPayment(db, S, e.id, { amount: e.fee, method: 'Chuyển khoản' }); }
+    back(c2);
 
     // 3) IELTS – Cầu Giấy: đang học (cuối tuần, cùng giáo viên khác)
     const c3 = Seed.klass(db, { course: 'co6', branch: 'br1', term: t0.id, sched: sched([6], '08:00', '11:00', 'br1r2', 'gv2', start0) });
     for (let i = 0; i < 10; i++) { const e = R.enroll(db, S, 'hv' + (i + 11), c3.id); R.addPayment(db, S, e.id, { amount: e.fee, method: 'Chuyển khoản' }); }
+    back(c3);
     R.confirmOpen(db, S, c3.id);
 
     // 4) Lớp ở đợt kế tiếp (mở đăng ký) + 1 lớp nháp
-    const c4 = Seed.klass(db, { course: 'co2', branch: 'br1', term: t1.id, sched: sched([2, 4], '18:00', '19:30', 'br1r1', 'gv1', U.monday(t1.start) < t1.start ? t1.start : U.monday(t1.start)) });
+    // Lớp đợt sau dùng phòng/giáo viên khác lớp đợt này: lớp đợt này có thể kéo dài sang quý kế tiếp tùy ngày hiện tại
+    const c4 = Seed.klass(db, { course: 'co2', branch: 'br1', term: t1.id, sched: sched([2, 4], '18:00', '19:30', 'br1r3', 'gv3', U.monday(t1.start) < t1.start ? t1.start : U.monday(t1.start)) });
     ['hv18', 'hv19'].forEach((id) => R.enroll(db, S, id, c4.id));
     Seed.klass(db, { course: 'co4', branch: 'br3', term: t1.id, sched: sched([2, 4], '19:00', '20:30', 'br3r1', 'gv6', t1.start) });
     Seed.klass(db, { course: 'co1', branch: 'br4', term: t1.id });

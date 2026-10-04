@@ -3,8 +3,8 @@ import { CountUp } from '../fx.jsx';
 import { useAsk, Btn, LinkBtn, Badge, Card, Note, H3, Bar, Meter, Table, In, Sel, Filter } from '../ui.jsx';
 import { useStore } from '../store.jsx';
 import { R, U, CFG } from '../lib/rules.js';
-import { by, vnd, dmy, TYPE, ROLE, reqDesc, enLabel } from '../lib/util.js';
-import { NewClassForm, ClassEditForm, ScheduleForm, EnrollForm, PayForm, ReserveForm, TransferForm, MakeupForm, RejectForm } from '../forms.jsx';
+import { by, vnd, dmy, TYPE, ROLE, reqDesc, enLabel, canViewClass } from '../lib/util.js';
+import { FinishForm, NewClassForm, ClassEditForm, ScheduleForm, EnrollForm, PayForm, ReserveForm, TransferForm, MakeupForm, RejectForm } from '../forms.jsx';
 
 export const Head = ({ title, children }) => <div className="mb-5 flex flex-wrap items-center gap-2.5"><h1 className="bg-gradient-to-r from-slate-900 to-indigo-700 bg-clip-text text-2xl font-extrabold tracking-tight text-transparent">{title}</h1><div className="flex-1" />{children}</div>;
 const Stu = ({ id }) => { const { db } = useStore(); const s = by(db, 'students', id); return <>{s.name} <small className="text-slate-500">{s.code}</small></>; };
@@ -21,7 +21,7 @@ export function Dashboard() {
       <Table head={['Ngày', 'Giờ', 'Lớp', 'Phòng', 'Buổi']} rows={mine.map((s) => <tr key={s.id}><td>{dmy(s.date)} {s.date === today && <Badge t="Hôm nay" />}</td><td>{s.start}-{s.end}</td><td>{by(db, 'classes', s.classId).code}</td><td>{by(db, 'rooms', s.roomId).name}</td><td>{s.no}</td></tr>)} /></>);
   }
   const rev = db.payments.filter((p) => p.type === 'Thu' && p.date.startsWith(month)).reduce((s, p) => s + p.amount, 0);
-  const debt = db.enrollments.filter((e) => ['Chờ đóng phí', 'Đã xác nhận'].includes(e.status)).reduce((s, e) => s + R.due(db, e), 0);
+  const debt = db.enrollments.filter((e) => R.COLLECTIBLE.includes(e.status)).reduce((s, e) => s + R.due(db, e), 0);
   const stat = [['Lớp đang học', db.classes.filter((c) => c.status === 'Đang học').length, '🏫', 'from-blue-500 to-cyan-400'], ['Lớp mở đăng ký', db.classes.filter((c) => c.status === 'Mở đăng ký').length, '📣', 'from-violet-500 to-fuchsia-400'], ['Học viên đang học', db.enrollments.filter((e) => e.status === 'Đã xác nhận').length, '🎓', 'from-emerald-500 to-lime-400'], ['Thu trong tháng', rev, '💰', 'from-amber-500 to-orange-400'], ['Học phí còn phải thu', debt, '🧾', 'from-rose-500 to-pink-400'], ['Yêu cầu chờ duyệt', db.requests.filter((r) => r.status === 'Chờ duyệt').length, '📨', 'from-indigo-500 to-blue-400']];
   const risk = db.classes.filter((c) => c.status === 'Mở đăng ký'), ts = db.sessions.filter((s) => s.date === today).sort((a, b) => a.start.localeCompare(b.start));
   return (
@@ -44,7 +44,7 @@ export function Dashboard() {
         </Card>))}</div>
       <H3>Lớp đang mở đăng ký – theo dõi sĩ số tối thiểu</H3>
       <Table head={['Lớp', 'Chi nhánh', 'Khai giảng', 'Đã xác nhận', 'Trạng thái']} rows={risk.map((c) => { const n = R.confirmed(db, c.id).length; return (
-        <tr key={c.id}><td><a className="font-bold text-blue-700" href={`#/app/class/${c.id}`}>{c.code}</a></td><td>{by(db, 'branches', c.branchId).name}</td><td>{dmy(c.startDate)}</td><td><div className="w-40">{n}/{CFG.minStudents}<Meter v={n} min={CFG.minStudents} /></div></td><td>{n >= CFG.minStudents ? <Badge t="Đủ điều kiện mở" /> : <Badge t={`Thiếu ${CFG.minStudents - n}`} c="amber" />}</td></tr>); })} />
+        <tr key={c.id}><td>{canViewClass(user) ? <a className="font-bold text-blue-700" href={`#/app/class/${c.id}`}>{c.code}</a> : <b>{c.code}</b>}</td><td>{by(db, 'branches', c.branchId).name}</td><td>{dmy(c.startDate)}</td><td><div className="w-40">{n}/{CFG.minStudents}<Meter v={n} min={CFG.minStudents} /></div></td><td>{n >= CFG.minStudents ? <Badge t="Đủ điều kiện mở" /> : <Badge t={`Thiếu ${CFG.minStudents - n}`} c="amber" />}</td></tr>); })} />
       <H3>Buổi học hôm nay ({dmy(today)})</H3>
       <Table head={['Giờ', 'Lớp', 'Chi nhánh', 'Phòng', 'Giáo viên']} rows={ts.map((s) => <tr key={s.id}><td>{s.start}-{s.end}</td><td>{by(db, 'classes', s.classId).code}</td><td>{by(db, 'branches', by(db, 'classes', s.classId).branchId).name}</td><td>{by(db, 'rooms', s.roomId).name}</td><td>{by(db, 'teachers', s.teacherId).name}</td></tr>)} />
     </>
@@ -97,7 +97,7 @@ export function ClassDetail({ id }) {
         {k && pre && <Btn v="ghost" onClick={() => openModal(<ScheduleForm id={id} />)}>{ss.length ? 'Sửa lịch' : 'Xếp lịch'}</Btn>}
         {k && c.status === 'Nháp' && <Btn onClick={() => ask({ title: 'Mở đăng ký cho lớp này?', message: 'Sau khi mở, nhân viên ghi danh có thể đăng ký học viên vào lớp.', ok: 'Mở đăng ký', onConfirm: () => act(() => R.openRegistration(db, user, id), 'Lớp đã mở đăng ký') })}>Mở đăng ký</Btn>}
         {k && c.status === 'Mở đăng ký' && <Btn v="ok" onClick={() => ask({ title: 'Xác nhận mở lớp?', message: 'Lớp sẽ chuyển sang “Đang học”. Hệ thống kiểm tra lại sĩ số tối thiểu và lịch học.', ok: 'Xác nhận mở lớp', onConfirm: () => act(() => { R.confirmOpen(db, user, id); }, 'Lớp đã được xác nhận mở – bắt đầu đào tạo', true) })}>Xác nhận mở lớp</Btn>}
-        {k && c.status === 'Đang học' && <Btn v="warn" onClick={() => ask({ title: 'Kết thúc lớp này?', message: `Lớp ${c.code} sẽ chuyển sang “Kết thúc” và các học viên đã xác nhận được ghi nhận hoàn thành.`, ok: 'Kết thúc lớp', onConfirm: () => act(() => R.finishClass(db, user, id), 'Đã kết thúc lớp') })}>Kết thúc lớp</Btn>}
+        {k && c.status === 'Đang học' && <Btn v="warn" onClick={() => openModal(<FinishForm id={id} />)}>Kết thúc lớp</Btn>}
         {k && c.status === 'Nháp' && <Btn v="ghost" onClick={() => openModal(<ClassEditForm id={id} />)}>✏️ Sửa thông tin</Btn>}
         {k && ['Nháp', 'Đã hủy'].includes(c.status) && <Btn v="bad" onClick={() => ask({ title: 'Bạn có chắc chắn muốn xóa lớp?', message: `Lớp ${c.code} sẽ bị xóa vĩnh viễn cùng lịch học. Chỉ xóa được lớp chưa có dữ liệu đăng ký.`, ok: 'Xóa lớp', danger: true, onConfirm: () => { if (act(() => R.deleteClass(db, user, id))) location.hash = '#/app/classes'; } })}>🗑 Xóa lớp</Btn>}
         {k && pre && <Btn v="bad" onClick={() => ask({ title: 'Bạn có chắc chắn muốn hủy lớp?', message: `Lớp ${c.code} sẽ bị hủy, lịch học bị xóa và học phí đã đóng chuyển vào số dư của từng học viên.`, ok: 'Hủy lớp', danger: true, onConfirm: () => act(() => R.cancelClass(db, user, id), 'Đã hủy lớp') })}>Hủy lớp</Btn>}
@@ -112,7 +112,7 @@ export function ClassDetail({ id }) {
       </div>
       <H3>Học viên</H3>
       <Table head={['Học viên', 'Trạng thái', 'Học phí', 'Đã đóng', 'Còn nợ', '']} right={[2, 3, 4]} rows={ens.map((e) => {
-        const live = ['Chờ đóng phí', 'Đã xác nhận'].includes(e.status);
+        const live = R.COLLECTIBLE.includes(e.status);
         return <tr key={e.id}><td><Stu id={e.studentId} /></td><td><Badge t={e.status} /></td><td className="text-right">{vnd(e.fee)}</td><td className="text-right">{vnd(R.paid(db, e.id))}</td><td className="text-right">{vnd(live ? R.due(db, e) : 0)}</td><td>{R.can(user, 'pay') && live && R.due(db, e) > 0 && <Btn sm onClick={() => openModal(<PayForm eid={e.id} />)}>Thu phí</Btn>}</td></tr>;
       })} />
       <H3>Các buổi học ({ss.length})</H3>
@@ -133,11 +133,11 @@ export function Enrollments() {
       <Note>Đăng ký mới được tạo tại <b>Lớp học → chi tiết lớp → Đăng ký học viên</b>. Bảo lưu, chuyển lớp, học bù tạo yêu cầu chờ Quản lý đào tạo duyệt.</Note>
       <div className="mb-3.5 flex flex-wrap gap-2.5"><In className="max-w-xs" placeholder="Tìm học viên / lớp…" value={q} onChange={(e) => setQ(e.target.value)} /><Filter value={es} onChange={(e) => setEs(e.target.value)} ph="Mọi trạng thái" options={statuses(['Chờ đóng phí', 'Đã xác nhận', 'Bảo lưu', 'Đã chuyển lớp', 'Hoàn thành', 'Đã hủy'])} /></div>
       <Table head={['Học viên', 'Lớp', 'Học phí', 'Đã đóng', 'Còn nợ', 'Trạng thái', '']} right={[2, 3, 4]} rows={rows.map((e) => {
-        const live = ['Chờ đóng phí', 'Đã xác nhận'].includes(e.status);
+        const live = ['Chờ đóng phí', 'Đã xác nhận'].includes(e.status), coll = R.COLLECTIBLE.includes(e.status);
         return (
-          <tr key={e.id}><td><Stu id={e.studentId} /></td><td><a className="text-blue-700" href={`#/app/class/${e.classId}`}>{by(db, 'classes', e.classId).code}</a></td><td className="text-right">{vnd(e.fee)}</td><td className="text-right">{vnd(R.paid(db, e.id))}</td><td className="text-right">{live ? vnd(R.due(db, e)) : '—'}</td><td><Badge t={e.status} /></td>
+          <tr key={e.id}><td><Stu id={e.studentId} /></td><td>{canViewClass(user) ? <a className="text-blue-700" href={`#/app/class/${e.classId}`}>{by(db, 'classes', e.classId).code}</a> : by(db, 'classes', e.classId).code}</td><td className="text-right">{vnd(e.fee)}</td><td className="text-right">{vnd(R.paid(db, e.id))}</td><td className="text-right">{coll ? vnd(R.due(db, e)) : '—'}</td><td><Badge t={e.status} /></td>
             <td><div className="flex flex-wrap gap-1.5">
-              {canPay && live && R.due(db, e) > 0 && <Btn sm onClick={() => openModal(<PayForm eid={e.id} />)}>Thu phí</Btn>}
+              {canPay && coll && R.due(db, e) > 0 && <Btn sm onClick={() => openModal(<PayForm eid={e.id} />)}>Thu phí</Btn>}
               {canReq && e.status === 'Đã xác nhận' && <Btn v="ghost" sm onClick={() => openModal(<ReserveForm eid={e.id} />)}>Bảo lưu</Btn>}
               {canReq && live && <Btn v="ghost" sm onClick={() => openModal(<TransferForm eid={e.id} />)}>Chuyển lớp</Btn>}
               {canReq && e.status === 'Đã xác nhận' && <Btn v="ghost" sm onClick={() => openModal(<MakeupForm eid={e.id} />)}>Học bù</Btn>}
@@ -150,7 +150,7 @@ export function Enrollments() {
 
 export function Payments() {
   const { db, user, openModal } = useStore();
-  const debts = db.enrollments.filter((e) => ['Chờ đóng phí', 'Đã xác nhận'].includes(e.status) && R.due(db, e) > 0), pays = db.payments.slice().reverse().slice(0, 60), can = R.can(user, 'pay');
+  const debts = db.enrollments.filter((e) => R.COLLECTIBLE.includes(e.status) && R.due(db, e) > 0), pays = db.payments.slice().reverse().slice(0, 60), can = R.can(user, 'pay');
   return (
     <>
       <Head title="Học phí" />
@@ -178,7 +178,7 @@ export function Requests() {
           <td>{can && r.status === 'Chờ duyệt' && <div className="flex gap-1.5"><Btn v="ok" sm onClick={() => ask({ title: 'Duyệt yêu cầu này?', message: `${TYPE[r.type]}: ${reqDesc(db, r)}. Hệ thống sẽ áp dụng thay đổi ngay sau khi duyệt.`, ok: 'Duyệt', onConfirm: () => act(() => R.approve(db, user, r.id).result, 'Đã duyệt', true) })}>Duyệt</Btn><Btn v="bad" sm onClick={() => openModal(<RejectForm id={r.id} />)}>Từ chối</Btn></div>}</td></tr>
       ))} />
       <H3>Phiếu bảo lưu</H3>
-      <Table head={['Học viên', 'Lớp đã bảo lưu', 'Học phí giữ lại', 'Hạn bảo lưu', 'Trạng thái']} rows={db.reservations.map((v) => <tr key={v.id}><td><Stu id={v.studentId} /></td><td>{by(db, 'classes', by(db, 'enrollments', v.enrollmentId).classId).code}</td><td>{vnd(v.credit)}</td><td>{dmy(v.expires)}</td><td><Badge t={v.status === 'Đang bảo lưu' && v.expires < U.today() ? 'Hết hạn' : v.status} /></td></tr>)} />
+      <Table head={['Học viên', 'Lớp đã bảo lưu', 'Học phí giữ lại', 'Hạn bảo lưu', 'Trạng thái']} rows={db.reservations.map((v) => <tr key={v.id}><td><Stu id={v.studentId} /></td><td>{by(db, 'classes', by(db, 'enrollments', v.enrollmentId).classId).code}</td><td>{vnd(v.credit)}</td><td>{dmy(v.expires)}</td><td><Badge t={R.rvStatus(v)} /></td></tr>)} />
     </>
   );
 }
@@ -188,7 +188,8 @@ export function Attendance() {
   const { db, user, act } = useStore();
   const [pick, setPick] = useState(null), [draft, setDraft] = useState({});
   const today = U.today(), from = U.addDays(today, -45);
-  const list = db.sessions.filter((s) => s.date <= today && s.date >= from && (user.role !== 'teacher' || s.teacherId === user.teacherId)).sort((a, b) => b.date.localeCompare(a.date) || b.start.localeCompare(a.start));
+  const attendable = (s) => { const st = by(db, 'classes', s.classId).status; return st === 'Đang học' || (st === 'Kết thúc' && user.role === 'manager'); };
+  const list = db.sessions.filter((s) => s.date <= today && s.date >= from && attendable(s) && (user.role !== 'teacher' || s.teacherId === user.teacherId)).sort((a, b) => b.date.localeCompare(a.date) || b.start.localeCompare(a.start));
   if (!list.length) return <><Head title="Điểm danh" /><Note>Chưa có buổi học nào cần điểm danh.</Note></>;
   const sid = list.some((s) => s.id === pick) ? pick : list[0].id, s = by(db, 'sessions', sid), rows = R.attendees(db, sid);
   const val = (e) => draft[`${sid}:${e.id}`] ?? (db.attendance.find((x) => x.sessionId === sid && x.enrollmentId === e.id) || {}).status ?? 'Có mặt';

@@ -15,7 +15,7 @@ Tài liệu này giải thích dự án được tổ chức thế nào, dữ li
 
 ```bash
 npm run dev      # chạy thử, mở http://localhost:5173
-npm test         # chạy 23 ca kiểm thử luật nghiệp vụ (không cần trình duyệt)
+npm test         # chạy 38 ca kiểm thử luật nghiệp vụ (không cần trình duyệt)
 npm run build    # đóng gói vào thư mục dist/
 ```
 
@@ -42,7 +42,7 @@ abc-english-react/
    ├─ lib/
    │  ├─ rules.js          ★ TOÀN BỘ LUẬT NGHIỆP VỤ và phân quyền (không dính React)
    │  ├─ seed.js           Dữ liệu nền và dữ liệu demo
-   │  ├─ tests.js          23 ca kiểm thử
+   │  ├─ tests.js          38 ca kiểm thử
    │  └─ util.js           Hàm nhỏ: by(), vnd, dmy, ROLE, TYPE, reqDesc...
    └─ pages/
       ├─ public.jsx        Trang giới thiệu (Landing) và Đăng nhập (Login)
@@ -210,6 +210,9 @@ Bảng hàm chính (đều nhận `db` và `user`; có kiểm tra quyền bằng
 | `saveUser` | Thêm/sửa tài khoản nhân viên (tên đăng nhập, vai trò, mật khẩu, giáo viên liên kết) | trùng tên đăng nhập, mật khẩu < 6 ký tự, giáo viên chưa gắn hồ sơ, tự hạ quyền, hạ quyền Quản lý cuối cùng |
 | `deleteUser` | Xóa tài khoản | xóa chính mình, xóa Quản lý cuối cùng |
 | `openRegistration` | Nháp → Mở đăng ký | chưa xếp lịch |
+| `enrollCheck` | Điều kiện đưa học viên vào lớp, dùng chung cho ghi danh, chuyển lớp, học lại | học viên ngừng, lớp chưa mở, hết chỗ, trùng khóa/đợt, trùng lịch |
+| `saveMaster` / `deleteMaster` | CRUD danh mục (học viên, giáo viên, chi nhánh, phòng, khóa, đợt) có kiểm tra sau trim và chặn sửa/xóa mục đang dùng | trường rỗng/sai định dạng, mục đang có lớp/lịch, đổi chi nhánh của phòng có lịch |
+| `finishClass` | Kết thúc lớp | chưa học buổi nào; kết thúc sớm không có lý do |
 | `confirmOpen` | Mở đăng ký → Đang học | **chưa đủ `minStudents` đã xác nhận**, lịch bị trùng |
 | `enroll` (`_enroll`) | Tạo đăng ký, trạng thái Chờ đóng phí | lớp chưa mở, **đủ `maxStudents`**, đã đăng ký lớp/khóa này, **trùng lịch học viên**, vào muộn quá 2 buổi |
 | `addPayment` | Ghi phiếu thu; đủ 50% → Đã xác nhận | quá số còn nợ, số dư không đủ, sai trạng thái |
@@ -362,6 +365,16 @@ Thêm một mục vào `MASTER` trong `pages/master.jsx` (cols = cột bảng, f
 
 ### 9.6 Thêm vai trò / tài khoản
 Tài khoản ở `Seed.minimal().users`; vai trò mới cần thêm vào `PERMS` (rules.js), `ROLE` (util.js) và `ROLE_MENU` (App.jsx). Muốn áp dụng dữ liệu seed mới: bấm "↺ Khôi phục dữ liệu demo" ở thanh bên (tài khoản quản lý) hoặc xóa localStorage.
+
+---
+
+### An toàn dữ liệu lưu trữ (`store.jsx`)
+
+- **Nạp dữ liệu:** kiểm tra đủ các bảng; dữ liệu hỏng được sao lưu sang khóa riêng `..._corrupt_<thời điểm>` rồi nạp dữ liệu demo, không bao giờ xóa im lặng. Nếu tạo dữ liệu demo lỗi thì nạp dữ liệu nền (chưa có lớp) và báo trên màn hình.
+- **`commit()` trả về true/false:** lưu thất bại (đầy bộ nhớ/bị chặn) thì hoàn tác thao tác và báo lỗi; chỉ khi lưu xong mới hiện "Thành công".
+- **Phiên bản dữ liệu `meta.rev`:** mỗi lần ghi tăng 1; nếu dữ liệu đã bị tab khác sửa thì thao tác bị từ chối và tải bản mới. Sự kiện `storage` giúp các tab tự đồng bộ. Đây chỉ giảm rủi ro, không thay thế CSDL dùng chung.
+- **`ErrorBoundary`** (App.jsx) chặn trang trắng, cho tải dữ liệu hiện tại hoặc nạp lại demo (có sao lưu bản cũ).
+- Quản lý có nút **Sao lưu dữ liệu (JSON)** và **Nạp bản sao lưu** ở thanh bên.
 
 ---
 

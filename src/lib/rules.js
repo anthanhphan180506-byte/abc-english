@@ -39,6 +39,10 @@ const PERMS = {
 };
 
 const R = { CFG, LIVE, PERMS };
+R.COLLECTIBLE = ['Chờ đóng phí', 'Đã xác nhận', 'Hoàn thành']; // đăng ký còn được thu học phí (kể cả đã hoàn thành mà còn nợ)
+R.METHODS = ['Tiền mặt', 'Chuyển khoản', 'Số dư'];
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const validIso = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && U.iso(U.parse(s)) === s;
 
 /* ---------- tiện ích truy cập dữ liệu ---------- */
 R.can = (u, a) => !!u && (PERMS[a] || []).includes(u.role);
@@ -74,22 +78,38 @@ R.resourceConflicts = (db, sessions, roomId, teacherId, excludeClassId) => {
   return [...new Set(out)];
 };
 
-R.studentConflict = (db, studentId, classId, excludeEid) => {
-  const mine = R.sessions(db, classId);
+/* Các khoảng thời gian học viên đã bận: buổi của các lớp đang học + buổi học bù đã/đang xin */
+R.studentBusy = (db, studentId, { excludeEid, excludeClass, excludeReq } = {}) => {
+  const out = [];
   for (const e of db.enrollments) {
-    if (e.studentId !== studentId || !LIVE.includes(e.status) || e.id === excludeEid || e.classId === classId) continue;
-    for (const s of R.sessions(db, e.classId)) for (const t of mine) {
-      if (overlap(s, t)) return `Học viên trùng lịch với lớp ${R.by(db, 'classes', e.classId).code} ngày ${U.dmy(t.date)} (${s.start}-${s.end}).`;
-    }
+    if (e.studentId !== studentId || !LIVE.includes(e.status) || e.id === excludeEid || e.classId === excludeClass) continue;
+    const c = R.by(db, 'classes', e.classId);
+    for (const s of R.sessions(db, e.classId)) out.push({ ...s, label: `lớp ${c.code}` });
   }
+  for (const r of db.requests) {
+    if (r.type !== 'makeup' || r.studentId !== studentId || r.id === excludeReq || !['Chờ duyệt', 'Đã duyệt'].includes(r.status)) continue;
+    const s = R.by(db, 'sessions', r.data.targetSessionId); if (!s) continue;
+    out.push({ ...s, label: `buổi học bù lớp ${R.by(db, 'classes', s.classId).code}` });
+  }
+  return out;
+};
+R.studentConflictWith = (db, studentId, sessions, opts) => {
+  const busy = R.studentBusy(db, studentId, opts);
+  for (const t of sessions) { const s = busy.find((x) => overlap(x, t)); if (s) return `Học viên trùng lịch với ${s.label} ngày ${U.dmy(t.date)} (${s.start}-${s.end}).`; }
   return null;
 };
+R.studentConflict = (db, studentId, classId, excludeEid) => R.studentConflictWith(db, studentId, R.sessions(db, classId), { excludeEid, excludeClass: classId });
 
 /* ---------- lớp học & lịch ---------- */
+/* Mã lớp = <khóa>-<chi nhánh>-<đợt>-<số thứ tự>; số thứ tự = lớn nhất đã dùng + 1 nên không bao giờ trùng dù có xóa/sửa */
+const classCode = (db, course, br, term, selfId) => {
+  const prefix = `${course.code}-${br.code}-${term.code}-`;
+  const max = db.classes.filter((c) => c.id !== selfId && c.code.startsWith(prefix)).reduce((m, c) => Math.max(m, parseInt(c.code.slice(prefix.length), 10) || 0), 0);
+  return prefix + String(max + 1).padStart(2, '0');
+};
 R.createClass = (db, u, p) => { R.need(u, 'klass'); return R.atomic(db, () => {
   const course = R.must(db, 'courses', p.courseId, 'khóa học'), br = R.must(db, 'branches', p.branchId, 'chi nhánh'), term = R.must(db, 'terms', p.termId, 'đợt đào tạo');
-  const n = db.classes.filter((c) => c.courseId === course.id && c.branchId === br.id && c.termId === term.id).length + 1;
-  const c = { id: U.id('cl'), code: `${course.code}-${br.code}-${term.code}-${String(n).padStart(2, '0')}`, courseId: course.id, branchId: br.id, termId: term.id, status: 'Nháp', weekdays: [], start: '', end: '', roomId: '', teacherId: '', startDate: '' };
+  const c = { id: U.id('cl'), code: classCode(db, course, br, term, null), courseId: course.id, branchId: br.id, termId: term.id, status: 'Nháp', weekdays: [], start: '', end: '', roomId: '', teacherId: '', startDate: '' };
   db.classes.push(c); return c;
 }); };
 
@@ -98,16 +118,24 @@ R.setSchedule = (db, u, classId, p) => { R.need(u, 'klass'); return R.atomic(db,
   if (!['Nháp', 'Mở đăng ký'].includes(c.status)) fail('Chỉ sửa được lịch khi lớp ở trạng thái Nháp hoặc Mở đăng ký.');
   const wd = [...new Set((p.weekdays || []).map(Number))];
   if (!wd.length) fail('Chọn ít nhất một ngày học trong tuần.');
-  if (!p.start || !p.end || p.start >= p.end) fail('Giờ học không hợp lệ (giờ kết thúc phải sau giờ bắt đầu).');
+  if (wd.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) fail('Ngày học trong tuần không hợp lệ.');
+  if (!TIME_RE.test(p.start || '') || !TIME_RE.test(p.end || '')) fail('Giờ học phải theo định dạng HH:mm (00:00–23:59).');
+  if (p.start >= p.end) fail('Giờ học không hợp lệ (giờ kết thúc phải sau giờ bắt đầu).');
+  if (!Number.isInteger(course.sessions) || course.sessions < 1 || course.sessions > 200) fail('Số buổi của khóa học không hợp lệ.');
+  if (!validIso(p.startDate)) fail('Ngày khai giảng không hợp lệ.');
   const room = R.must(db, 'rooms', p.roomId, 'phòng học'), tch = R.must(db, 'teachers', p.teacherId, 'giáo viên');
   if (room.branchId !== c.branchId) fail('Phòng học không thuộc chi nhánh của lớp.');
   if (tch.status !== 'Đang dạy') fail('Giáo viên này hiện không nhận lớp.');
-  if (!p.startDate || p.startDate < term.start || p.startDate > term.end) fail(`Ngày khai giảng phải nằm trong ${term.name} (${U.dmy(term.start)} – ${U.dmy(term.end)}).`);
+  if (p.startDate < term.start || p.startDate > term.end) fail(`Ngày khai giảng phải nằm trong ${term.name} (${U.dmy(term.start)} – ${U.dmy(term.end)}).`);
   const list = []; let d = p.startDate;
   while (list.length < course.sessions) { if (wd.includes(U.dow(d))) list.push(d); d = U.addDays(d, 1); }
   const ss = list.map((date, i) => ({ id: U.id('ss'), classId, no: i + 1, date, start: p.start, end: p.end, roomId: room.id, teacherId: tch.id, held: false }));
   const cf = R.resourceConflicts(db, ss, room.id, tch.id, classId);
   if (cf.length) fail('Không thể lưu lịch vì trùng: ' + cf.slice(0, 3).join('; ') + (cf.length > 3 ? ` … (và ${cf.length - 3} xung đột khác)` : '') + '.');
+  for (const e of R.live(db, classId)) { // đổi lịch không được làm học viên đã ghi danh bị trùng lịch
+    const msg = R.studentConflictWith(db, e.studentId, ss, { excludeClass: classId });
+    if (msg) fail(`Không thể đổi lịch vì học viên ${R.by(db, 'students', e.studentId).name} sẽ bị trùng lịch. ${msg}`);
+  }
   db.sessions = db.sessions.filter((s) => s.classId !== classId).concat(ss);
   Object.assign(c, { weekdays: wd, start: p.start, end: p.end, roomId: room.id, teacherId: tch.id, startDate: p.startDate, endDate: list[list.length - 1] });
   return c;
@@ -129,17 +157,20 @@ R.confirmOpen = (db, u, classId) => { R.need(u, 'klass'); return R.atomic(db, ()
   c.status = 'Đang học'; return c;
 }); };
 
-R.finishClass = (db, u, classId) => { R.need(u, 'klass');
+R.finishClass = (db, u, classId, reason) => { R.need(u, 'klass'); return R.atomic(db, () => {
   const c = R.must(db, 'classes', classId, 'lớp');
   if (c.status !== 'Đang học') fail('Chỉ kết thúc lớp đang học.');
+  const total = R.sessions(db, classId).length, done = R.held(db, classId);
+  if (!done) fail('Lớp chưa tổ chức buổi học nào nên chưa thể kết thúc.');
+  if (done < total) {
+    if (!String(reason || '').trim()) fail(`Lớp mới học ${done}/${total} buổi. Hãy nhập lý do nếu muốn kết thúc sớm.`);
+    c.finishNote = String(reason).trim();
+  }
   c.status = 'Kết thúc';
   db.enrollments.filter((e) => e.classId === classId && e.status === 'Đã xác nhận').forEach((e) => { e.status = 'Hoàn thành'; });
-  return c; };
+  return c;
+}); };
 
-const classCode = (db, course, br, term, selfId) => {
-  const n = db.classes.filter((c) => c.id !== selfId && c.courseId === course.id && c.branchId === br.id && c.termId === term.id).length + 1;
-  return `${course.code}-${br.code}-${term.code}-${String(n).padStart(2, '0')}`;
-};
 /* Sửa thông tin lớp (chỉ khi còn Nháp). Đổi khóa/chi nhánh/đợt thì lịch cũ không còn đúng nên bị xóa. */
 R.updateClass = (db, u, id, p) => { R.need(u, 'klass'); return R.atomic(db, () => {
   const c = R.must(db, 'classes', id, 'lớp');
@@ -151,7 +182,8 @@ R.updateClass = (db, u, id, p) => { R.need(u, 'klass'); return R.atomic(db, () =
     db.sessions = db.sessions.filter((s) => s.classId !== id);
     Object.assign(c, { weekdays: [], start: '', end: '', roomId: '', teacherId: '', startDate: '', endDate: '' });
   }
-  Object.assign(c, { courseId: course.id, branchId: br.id, termId: term.id, code: classCode(db, course, br, term, id) });
+  Object.assign(c, { courseId: course.id, branchId: br.id, termId: term.id });
+  if (changed) c.code = classCode(db, course, br, term, id); // không đổi nhóm thì giữ nguyên mã
   return changed ? 'Đã lưu. Lịch học cũ bị xóa, hãy xếp lại lịch.' : 'Đã lưu';
 }); };
 /* Xóa lớp: chỉ lớp Nháp hoặc đã hủy và chưa có dữ liệu đăng ký */
@@ -203,17 +235,22 @@ R.cancelClass = (db, u, classId) => { R.need(u, 'klass'); return R.atomic(db, ()
 }); };
 
 /* ---------- đăng ký học & học phí ---------- */
-R._enroll = (db, studentId, classId) => {
+/* Kiểm tra điều kiện đưa học viên vào lớp – dùng chung cho ghi danh, chuyển lớp, học lại (excludeEid = đăng ký cũ được bỏ qua) */
+R.enrollCheck = (db, studentId, classId, excludeEid) => {
   const st = R.must(db, 'students', studentId, 'học viên'), c = R.must(db, 'classes', classId, 'lớp');
   if (st.status !== 'Hoạt động') fail('Hồ sơ học viên đang ngừng hoạt động.');
   if (!['Mở đăng ký', 'Đang học'].includes(c.status)) fail('Lớp chưa mở đăng ký hoặc đã đóng đăng ký.');
   if (c.status === 'Đang học' && R.held(db, classId) > CFG.lateJoin) fail(`Lớp đã học quá ${CFG.lateJoin} buổi, không nhận thêm học viên.`);
   const live = R.live(db, classId);
-  if (live.some((e) => e.studentId === studentId)) fail('Học viên đã đăng ký lớp này.');
-  if (live.length >= CFG.maxStudents) fail(`Lớp đã đủ sĩ số tối đa (${CFG.maxStudents}).`);
-  const dup = db.enrollments.find((e) => e.studentId === studentId && LIVE.includes(e.status) && (() => { const o = R.by(db, 'classes', e.classId); return o.courseId === c.courseId && o.termId === c.termId; })());
+  if (live.some((e) => e.studentId === studentId && e.id !== excludeEid)) fail('Học viên đã đăng ký lớp này.');
+  if (live.length >= CFG.maxStudents) fail(`Lớp đã hết chỗ (đủ sĩ số tối đa ${CFG.maxStudents}).`);
+  const dup = db.enrollments.find((e) => e.id !== excludeEid && e.studentId === studentId && LIVE.includes(e.status) && (() => { const o = R.by(db, 'classes', e.classId); return o.courseId === c.courseId && o.termId === c.termId; })());
   if (dup) fail('Học viên đã đăng ký khóa học này trong đợt này ở lớp khác.');
-  const cf = R.studentConflict(db, studentId, classId, null); if (cf) fail(cf);
+  const cf = R.studentConflict(db, studentId, classId, excludeEid); if (cf) fail(cf);
+  return { st, c };
+};
+R._enroll = (db, studentId, classId) => {
+  const { c } = R.enrollCheck(db, studentId, classId, null);
   const e = { id: U.id('en'), studentId, classId, fee: R.by(db, 'courses', c.courseId).fee, status: 'Chờ đóng phí', createdAt: U.today() };
   db.enrollments.push(e); return e;
 };
@@ -227,8 +264,9 @@ R._pay = (db, e, amount, method, type, note, by) => {
 };
 R.addPayment = (db, u, eid, { amount, method, note }) => { R.need(u, 'pay'); return R.atomic(db, () => {
   const e = R.must(db, 'enrollments', eid, 'đăng ký học'); amount = Math.round(Number(amount));
-  if (!['Chờ đóng phí', 'Đã xác nhận'].includes(e.status)) fail('Đăng ký này không còn ở trạng thái thu phí.');
-  if (!(amount > 0)) fail('Số tiền phải lớn hơn 0.');
+  if (!R.COLLECTIBLE.includes(e.status)) fail('Đăng ký này không còn ở trạng thái thu phí.');
+  if (!R.METHODS.includes(method)) fail('Hình thức thanh toán không hợp lệ.');
+  if (!Number.isFinite(amount) || !(amount > 0)) fail('Số tiền phải là số lớn hơn 0.');
   if (amount > R.due(db, e)) fail(`Số tiền vượt quá khoản còn phải đóng (${U.vnd(R.due(db, e))}).`);
   if (method === 'Số dư') {
     const st = R.by(db, 'students', e.studentId);
@@ -261,11 +299,7 @@ R.V = {
     if (to.id === from.id) fail('Lớp đích trùng lớp hiện tại.');
     const fc = R.by(db, 'courses', from.courseId), tc = R.by(db, 'courses', to.courseId);
     if (fc.level !== tc.level) fail(`Lớp đích khác trình độ (${fc.name} → ${tc.name}). Chỉ chuyển giữa các khóa cùng trình độ.`);
-    if (!['Mở đăng ký', 'Đang học'].includes(to.status)) fail('Lớp đích chưa mở hoặc đã đóng đăng ký.');
-    if (to.status === 'Đang học' && R.held(db, to.id) > CFG.lateJoin) fail(`Lớp đích đã học quá ${CFG.lateJoin} buổi.`);
-    if (R.live(db, to.id).length >= CFG.maxStudents) fail(`Lớp đích đã hết chỗ (${CFG.maxStudents}/${CFG.maxStudents}).`);
-    if (R.live(db, to.id).some((x) => x.studentId === e.studentId)) fail('Học viên đã có trong lớp đích.');
-    const cf = R.studentConflict(db, e.studentId, to.id, e.id); if (cf) fail(cf);
+    R.enrollCheck(db, e.studentId, to.id, e.id); // cùng luật với ghi danh: học viên hoạt động, lớp mở, còn chỗ, không trùng khóa/đợt, không trùng lịch
     return { e, from, to, fc, tc, diff: tc.fee - e.fee };
   },
   makeup(db, d, r) {
@@ -285,11 +319,16 @@ R.V = {
     const room = R.by(db, 'rooms', target.roomId);
     const seats = room.capacity - R.live(db, tc.id).length - mine.filter((x) => x.status === 'Đã duyệt' && x.data.targetSessionId === target.id).length;
     if (seats <= 0) fail('Buổi học bù đã hết chỗ.');
-    for (const x of db.enrollments.filter((z) => z.studentId === e.studentId && LIVE.includes(z.status))) {
-      if (R.sessions(db, x.classId).some((s) => overlap(s, target))) fail('Học viên trùng lịch học vào thời điểm học bù.');
-    }
+    const cf = R.studentConflictWith(db, e.studentId, [target], { excludeReq: r && r.id }); // gồm cả các buổi học bù khác đã/đang xin
+    if (cf) fail(cf);
     return { e, missed, target, mc, tc };
   },
+};
+
+/* Các buổi vắng của một đăng ký mà chưa có yêu cầu học bù (đang chờ/đã duyệt) – chỉ tính yêu cầu của chính đăng ký này */
+R.makeupMissed = (db, eid) => {
+  const used = db.requests.filter((r) => r.type === 'makeup' && ['Chờ duyệt', 'Đã duyệt'].includes(r.status) && r.data.enrollmentId === eid).map((r) => r.data.missedSessionId);
+  return db.attendance.filter((a) => a.enrollmentId === eid && a.status === 'Vắng' && !used.includes(a.sessionId)).map((a) => R.by(db, 'sessions', a.sessionId)).filter(Boolean);
 };
 
 R.X = { // thực thi sau khi duyệt
@@ -335,7 +374,7 @@ R.reject = (db, u, rid, note) => { R.need(u, 'approve');
 R.resume = (db, u, rvId, classId) => { R.need(u, 'enroll'); return R.atomic(db, () => {
   const rv = R.must(db, 'reservations', rvId, 'phiếu bảo lưu');
   if (rv.status !== 'Đang bảo lưu') fail('Phiếu bảo lưu này không còn hiệu lực.');
-  if (rv.expires < U.today()) { rv.status = 'Hết hạn'; throw new RuleError('Phiếu bảo lưu đã hết hạn ' + U.dmy(rv.expires) + '.'); }
+  if (rv.expires < U.today()) fail('Phiếu bảo lưu đã hết hạn ' + U.dmy(rv.expires) + '.'); // trạng thái Hết hạn do R.syncExpiry ghi nhận, không sửa trong giao dịch bị hủy
   const old = R.by(db, 'enrollments', rv.enrollmentId), oc = R.by(db, 'classes', old.classId), nc = R.must(db, 'classes', classId, 'lớp');
   if (nc.courseId !== oc.courseId) fail('Học lại phải chọn lớp cùng khóa học đã bảo lưu.');
   const n = R._enroll(db, rv.studentId, classId); n.resumedFrom = rv.id;
@@ -343,17 +382,28 @@ R.resume = (db, u, rvId, classId) => { R.need(u, 'enroll'); return R.atomic(db, 
   rv.status = 'Đã học lại'; rv.resumedTo = n.id; return n;
 }); };
 
+/* Trạng thái bảo lưu hiển thị: tính từ hạn; syncExpiry ghi nhận vào dữ liệu (gọi ngoài giao dịch nghiệp vụ, vd khi mở ứng dụng) */
+R.rvStatus = (rv) => (rv.status === 'Đang bảo lưu' && rv.expires < U.today() ? 'Hết hạn' : rv.status);
+R.syncExpiry = (db) => { let n = 0; for (const rv of db.reservations) { const s = R.rvStatus(rv); if (s !== rv.status) { rv.status = s; n++; } } return n; };
+
 /* ---------- điểm danh ---------- */
+/* Danh sách điểm danh của một buổi: (1) người đã có bản ghi điểm danh buổi này – dù sau đó chuyển lớp/bảo lưu;
+ * (2) học viên đang học trong lớp và đã ghi danh từ ngày buổi học trở về trước; (3) học viên được duyệt học bù vào buổi này. */
 R.attendees = (db, sessionId) => {
-  const s = R.must(db, 'sessions', sessionId, 'buổi học');
-  const rows = R.confirmed(db, s.classId).map((e) => ({ e, makeup: null }));
+  const s = R.must(db, 'sessions', sessionId, 'buổi học'), rows = [], seen = new Set();
+  const add = (e, makeup) => { if (e && !seen.has(e.id)) { seen.add(e.id); rows.push({ e, makeup }); } };
+  db.attendance.filter((a) => a.sessionId === sessionId && !a.makeupReq).forEach((a) => add(R.by(db, 'enrollments', a.enrollmentId), null));
+  R.confirmed(db, s.classId).filter((e) => (e.createdAt || '') <= s.date).forEach((e) => add(e, null));
   db.requests.filter((r) => r.type === 'makeup' && r.status === 'Đã duyệt' && r.data.targetSessionId === sessionId)
-    .forEach((r) => rows.push({ e: R.by(db, 'enrollments', r.data.enrollmentId), makeup: r }));
+    .forEach((r) => add(R.by(db, 'enrollments', r.data.enrollmentId), r));
   return rows;
 };
 R.markAttendance = (db, u, sessionId, entries) => { R.need(u, 'attend'); return R.atomic(db, () => {
   const s = R.must(db, 'sessions', sessionId, 'buổi học');
+  const cls = R.by(db, 'classes', s.classId);
   if (u.role === 'teacher' && s.teacherId !== u.teacherId) fail('Bạn chỉ điểm danh được buổi học do mình phụ trách.');
+  if (cls.status === 'Kết thúc') { if (u.role !== 'manager') fail('Lớp đã kết thúc: chỉ Quản lý đào tạo được sửa điểm danh.'); }
+  else if (cls.status !== 'Đang học') fail('Lớp chưa được xác nhận mở (hoặc đã hủy) nên chưa thể điểm danh.');
   if (s.date > U.today()) fail('Chưa đến ngày học, chưa thể điểm danh.');
   const allowed = R.attendees(db, sessionId);
   for (const en of entries) {
@@ -365,6 +415,67 @@ R.markAttendance = (db, u, sessionId, entries) => { R.need(u, 'attend'); return 
   }
   s.held = true; return s;
 }); };
+
+/* ---------- danh mục: học viên, giáo viên, chi nhánh, phòng, khóa học, đợt ---------- */
+/* f = [khóa, nhãn, kiểu]; kiểu: 's' bắt buộc, 'o' tùy chọn, 'c' mã tự sinh nếu trống, 'p' điện thoại, 'x' email bắt buộc, 'm' email tùy chọn,
+ * 'd' ngày, mảng = liệt kê, {ref} = tham chiếu bảng khác, {n} = số */
+R.MASTER = {
+  students: { perm: 'student', pre: 'hv', init: { balance: 0, status: 'Hoạt động', level: 'A1' }, f: [['code', 'Mã học viên', 'c'], ['name', 'Họ và tên', 's'], ['dob', 'Ngày sinh', 'd'], ['phone', 'Điện thoại', 'p'], ['email', 'Email', 'm'], ['level', 'Trình độ', ['A1', 'A2', 'B1', 'B2', 'C1']], ['status', 'Trạng thái', ['Hoạt động', 'Ngừng']]] },
+  teachers: { perm: 'master', pre: 'gv', init: { status: 'Đang dạy' }, f: [['code', 'Mã giáo viên', 'c'], ['name', 'Họ và tên', 's'], ['phone', 'Điện thoại', 'p'], ['email', 'Email', 'x'], ['specialty', 'Chuyên môn', 's'], ['status', 'Trạng thái', ['Đang dạy', 'Nghỉ']]] },
+  branches: { perm: 'master', pre: 'br', f: [['code', 'Mã chi nhánh', 's'], ['name', 'Tên chi nhánh', 's'], ['address', 'Địa chỉ', 's'], ['phone', 'Điện thoại', 'p']] },
+  rooms: { perm: 'master', pre: 'rm', f: [['branchId', 'Chi nhánh', { ref: 'branches' }], ['name', 'Tên phòng', 's'], ['capacity', 'Sức chứa', { n: { int: 1, min: CFG.maxStudents } }]] },
+  courses: { perm: 'master', pre: 'co', f: [['code', 'Mã khóa', 's'], ['name', 'Tên khóa học', 's'], ['level', 'Cấp độ', { n: { int: 1, min: 0 } }], ['fee', 'Học phí', { n: { int: 1, min: 1 } }], ['sessions', 'Số buổi', { n: { int: 1, min: 1, max: 200 } }], ['desc', 'Mô tả', 'o']] },
+  terms: { perm: 'master', pre: 'tm', f: [['code', 'Mã đợt', 's'], ['name', 'Tên đợt', 's'], ['start', 'Ngày bắt đầu', 'd'], ['end', 'Ngày kết thúc', 'd']] },
+};
+R.saveMaster = (db, u, col, id, raw) => {
+  const M = R.MASTER[col]; if (!M) fail('Danh mục không hợp lệ.');
+  R.need(u, M.perm);
+  return R.atomic(db, () => {
+    const old = id ? R.must(db, col, id, 'mục cần sửa') : null, o = {};
+    for (const [k, label, type] of M.f) {
+      let v = raw[k]; v = v == null ? '' : typeof v === 'string' ? v.trim() : v;
+      if (type === 'o' || type === 'c' || type === 'm') { if (v && type === 'm' && !/^\S+@\S+\.\S+$/.test(v)) fail(`${label} không hợp lệ.`); o[k] = v; continue; }
+      if (v === '') fail(`Vui lòng nhập ${label.toLowerCase()}.`);
+      if (Array.isArray(type)) { if (!type.includes(v)) fail(`${label} không hợp lệ.`); }
+      else if (type && type.ref) { if (!R.by(db, type.ref, v)) fail(`${label} không tồn tại.`); }
+      else if (type && type.n) {
+        v = Number(v); const { int, min, max } = type.n;
+        if (!Number.isFinite(v) || (int && !Number.isInteger(v))) fail(`${label} phải là số${int ? ' nguyên' : ''}.`);
+        if (min != null && v < min) fail(`${label} phải từ ${min} trở lên.`);
+        if (max != null && v > max) fail(`${label} tối đa ${max}.`);
+      }
+      else if (type === 'd') { if (!validIso(v)) fail(`${label} không hợp lệ.`); }
+      else if (type === 'p') { if (!/^[0-9+()\-. ]{8,16}$/.test(v) || v.replace(/\D/g, '').length < 8) fail(`${label} không hợp lệ.`); }
+      else if (type === 'x') { if (!/^\S+@\S+\.\S+$/.test(v)) fail(`${label} không hợp lệ.`); }
+      o[k] = v;
+    }
+    if (col === 'terms' && o.start >= o.end) fail('Ngày kết thúc phải sau ngày bắt đầu.');
+    if (M.f[0][0] === 'code') {
+      if (!o.code) o.code = M.pre.toUpperCase() + String(db[col].length + 1).padStart(4, '0');
+      if (db[col].some((x) => x.id !== id && x.code && x.code.toLowerCase() === o.code.toLowerCase())) fail('Mã này đã tồn tại.');
+    }
+    if (old) { // sửa mục đang được dùng: chặn thay đổi làm dữ liệu lớp/lịch không còn nhất quán
+      const inClass = (key) => db.classes.some((c) => c[key] === id);
+      if (col === 'rooms' && o.branchId !== old.branchId && (inClass('roomId') || db.sessions.some((s) => s.roomId === id))) fail('Phòng đang có lịch học nên không thể chuyển sang chi nhánh khác.');
+      if (col === 'courses' && inClass('courseId') && (o.sessions !== old.sessions || o.level !== old.level || o.code !== old.code)) fail('Khóa học đã có lớp nên không thể đổi mã, cấp độ hoặc số buổi (chỉ đổi được tên, học phí, mô tả).');
+      if (col === 'terms' && inClass('termId') && (o.start !== old.start || o.end !== old.end || o.code !== old.code)) fail('Đợt đào tạo đã có lớp nên không thể đổi mã hoặc thời gian.');
+      if (col === 'branches' && inClass('branchId') && o.code !== old.code) fail('Chi nhánh đã có lớp nên không thể đổi mã.');
+      if (col === 'teachers' && o.status === 'Nghỉ' && old.status !== 'Nghỉ' && db.sessions.some((s) => s.teacherId === id && !s.held && s.date >= U.today())) fail('Giáo viên còn buổi dạy sắp tới, hãy đổi lịch/giáo viên trước khi chuyển sang trạng thái Nghỉ.');
+    }
+    if (old) Object.assign(old, o); else db[col].push({ id: U.id(M.pre), ...(M.init || {}), ...o });
+    return 'Đã lưu';
+  });
+};
+R.isUsed = (db, col, id) => Object.keys(db).some((k) => k !== col && Array.isArray(db[k]) && db[k].some((x) => Object.entries(x).some(([key, v]) => key.endsWith('Id') && v === id)));
+R.deleteMaster = (db, u, col, id) => {
+  const M = R.MASTER[col]; if (!M) fail('Danh mục không hợp lệ.');
+  R.need(u, M.perm);
+  return R.atomic(db, () => {
+    R.must(db, col, id, 'mục cần xóa');
+    if (R.isUsed(db, col, id)) fail(col === 'students' ? 'Học viên đã có dữ liệu đăng ký – hãy đặt trạng thái "Ngừng" thay vì xóa.' : 'Mục này đang được sử dụng nên không thể xóa.');
+    db[col] = db[col].filter((x) => x.id !== id); return 'Đã xóa';
+  });
+};
 
 /* ---------- báo cáo ---------- */
 R.report = (db) => {

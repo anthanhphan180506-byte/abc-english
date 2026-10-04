@@ -8,8 +8,9 @@ const seats = (db, c) => CFG.maxStudents - R.live(db, c.id).length;
 
 export function NewClassForm() {
   const { db, user } = useStore();
+  let createdId = null; // chỉ chuyển sang trang lớp sau khi đã lưu thành công
   return (
-    <Form title="Tạo lớp mới" ok="Tạo lớp" onSubmit={(fd) => { const c = R.createClass(db, user, Object.fromEntries(fd)); location.hash = '#/app/class/' + c.id; return 'Đã tạo lớp ' + c.code; }}>
+    <Form title="Tạo lớp mới" ok="Tạo lớp" onDone={() => { location.hash = '#/app/class/' + createdId; }} onSubmit={(fd) => { const c = R.createClass(db, user, Object.fromEntries(fd)); createdId = c.id; return 'Đã tạo lớp ' + c.code; }}>
       <Fld label="Khóa học"><Sel required name="courseId" options={db.courses.map((c) => [c.id, `${c.name} – ${vnd(c.fee)}`])} /></Fld>
       <Fld label="Chi nhánh"><Sel required name="branchId" options={db.branches.map((b) => [b.id, b.name])} /></Fld>
       <Fld label="Đợt đào tạo"><Sel required name="termId" options={db.terms.map((t) => [t.id, t.name])} /></Fld>
@@ -103,8 +104,7 @@ export function TransferForm({ eid }) {
 export function MakeupForm({ eid }) {
   const { db, user } = useStore();
   const e = by(db, 'enrollments', eid), c = by(db, 'classes', e.classId), today = U.today();
-  const used = db.requests.filter((r) => r.type === 'makeup' && ['Chờ duyệt', 'Đã duyệt'].includes(r.status)).map((r) => r.data.missedSessionId);
-  const missed = db.attendance.filter((a) => a.enrollmentId === eid && a.status === 'Vắng' && !used.includes(a.sessionId)).map((a) => by(db, 'sessions', a.sessionId));
+  const missed = R.makeupMissed(db, eid); // chỉ loại các buổi đã xin bù của chính đăng ký này
   const targets = db.sessions.filter((s) => s.date >= today && !s.held && s.classId !== c.id && by(db, 'classes', s.classId).courseId === c.courseId && by(db, 'classes', s.classId).status === 'Đang học').sort((a, b) => a.date.localeCompare(b.date)).slice(0, 40);
   return (
     <Form title="Đăng ký học bù" ok="Gửi yêu cầu" onSubmit={(fd) => { R.createRequest(db, user, 'makeup', { enrollmentId: eid, missedSessionId: fd.get('missed'), targetSessionId: fd.get('target') }, fd.get('reason')); return 'Đã gửi yêu cầu học bù – chờ duyệt'; }}>
@@ -137,7 +137,7 @@ export function ProfileView({ id }) {
       <Table head={['Lớp', 'Trạng thái', 'Học phí', 'Đã đóng']} right={[2, 3]} rows={ens.map((e) => <tr key={e.id}><td>{by(db, 'classes', e.classId).code}</td><td><Badge t={e.status} /></td><td className="text-right">{vnd(e.fee)}</td><td className="text-right">{vnd(R.paid(db, e.id))}</td></tr>)} />
       <H3>Bảo lưu</H3>
       <Table head={['Lớp', 'Học phí giữ lại', 'Hạn', 'Trạng thái', '']} rows={rvs.map((v) => {
-        const st = v.status === 'Đang bảo lưu' && v.expires < U.today() ? 'Hết hạn' : v.status;
+        const st = R.rvStatus(v);
         return <tr key={v.id}><td>{by(db, 'classes', by(db, 'enrollments', v.enrollmentId).classId).code}</td><td>{vnd(v.credit)}</td><td>{dmy(v.expires)}</td><td><Badge t={st} /></td><td>{st === 'Đang bảo lưu' && R.can(user, 'enroll') && <Btn sm onClick={() => openModal(<ResumeForm rvId={v.id} />)}>Học lại</Btn>}</td></tr>;
       })} />
     </Form>
@@ -153,6 +153,18 @@ export function ClassEditForm({ id }) {
       <Fld label="Chi nhánh"><Sel required name="branchId" defaultValue={c.branchId} options={db.branches.map((b) => [b.id, b.name])} /></Fld>
       <Fld label="Đợt đào tạo"><Sel required name="termId" defaultValue={c.termId} options={db.terms.map((t) => [t.id, t.name])} /></Fld>
       <Hint>Chỉ sửa được khi lớp còn Nháp. {hasSched ? 'Nếu đổi khóa học, chi nhánh hoặc đợt, lịch học hiện tại sẽ bị xóa và cần xếp lại.' : ''} Muốn đổi giờ/phòng/giáo viên, dùng nút “Sửa lịch”.</Hint>
+    </Form>
+  );
+}
+
+export function FinishForm({ id }) {
+  const { db, user } = useStore();
+  const c = by(db, 'classes', id), total = R.sessions(db, id).length, done = R.held(db, id);
+  return (
+    <Form title={`Kết thúc lớp ${c.code}`} ok="Kết thúc lớp" confirm="Bạn có chắc chắn muốn kết thúc lớp này?" onSubmit={(fd) => { R.finishClass(db, user, id, fd.get('reason')); return 'Đã kết thúc lớp'; }}>
+      <p className="mb-3">Đã học <b>{done}/{total}</b> buổi. Học viên đã xác nhận được ghi nhận <b>Hoàn thành</b>; khoản học phí còn nợ (nếu có) vẫn thu được ở trang Học phí.</p>
+      {done === 0 && <p className="mb-3 font-semibold text-red-600">Lớp chưa học buổi nào nên chưa thể kết thúc.</p>}
+      {done > 0 && done < total && <Fld label="Lý do kết thúc sớm (bắt buộc)"><Area required name="reason" /></Fld>}
     </Form>
   );
 }

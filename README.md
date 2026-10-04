@@ -6,7 +6,7 @@ React 19 + Vite + Tailwind CSS 4. Dữ liệu demo lưu trong localStorage của
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # 20 ca kiểm thử luật nghiệp vụ (không cần trình duyệt)
+npm test         # 38 ca kiểm thử luật nghiệp vụ (không cần trình duyệt)
 npm run build    # xuất bản vào dist/
 ```
 
@@ -23,3 +23,7 @@ quanly (Quản lý đào tạo) · ghidanh (Ghi danh) · ketoan (Kế toán) · 
 Sĩ số 10–20; đóng ≥ 50% học phí mới xác nhận chỗ; bảo lưu khi đã học ≤ 50% số buổi, hạn 3 tháng; chuyển lớp chỉ giữa các khóa cùng cấp độ (lệch phí: đắt hơn đóng thêm, rẻ hơn cộng số dư); học bù tối đa 2 buổi/đăng ký ở lớp khác cùng khóa; chỉ Quản lý đào tạo được duyệt.
 
 Bản demo không có máy chủ: mật khẩu và dữ liệu nằm ở trình duyệt, chỉ dùng để minh họa.
+
+## Tài liệu khác
+- `HUONG_DAN_CODE.md/.pdf` – hướng dẫn code và luồng chạy
+- `BAO_CAO_SUA_LOI.md` – bảng xử lý các lỗi B01–B19 từ báo cáo kiểm tra

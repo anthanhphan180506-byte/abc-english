@@ -35,17 +35,7 @@ export function EditForm({ col, id }) {
   const { db, user } = useStore();
   const M = MASTER[col], r = id ? by(db, col, id) : { ...(M.init || {}) };
   return (
-    <Form title={`${id ? 'Sửa' : 'Thêm'} – ${M.title}`} confirm={id ? 'Bạn có chắc chắn muốn lưu thay đổi này?' : null} onSubmit={(fd) => {
-      R.need(user, M.perm);
-      const o = {}; M.fields.forEach((f) => { let v = fd.get(f.k); v = typeof v === 'string' ? v.trim() : v; o[f.k] = f.t === 'number' ? Number(v) : v; });
-      if (col === 'terms' && o.start >= o.end) fail('Ngày kết thúc phải sau ngày bắt đầu.');
-      if (col === 'courses' && (o.fee <= 0 || o.sessions <= 0)) fail('Học phí và số buổi phải lớn hơn 0.');
-      if (col === 'rooms' && o.capacity < CFG.maxStudents) fail(`Sức chứa phòng tối thiểu bằng sĩ số tối đa (${CFG.maxStudents}).`);
-      if (!o.code && M.fields[0].k === 'code') o.code = M.pre.toUpperCase() + String(db[col].length + 1).padStart(4, '0');
-      if (o.code && db[col].some((x) => x.id !== id && x.code && x.code.toLowerCase() === o.code.toLowerCase())) fail('Mã này đã tồn tại.');
-      if (id) Object.assign(r, o); else db[col].push({ id: U.id(M.pre), ...M.init, ...o });
-      return 'Đã lưu';
-    }}>
+    <Form title={`${id ? 'Sửa' : 'Thêm'} – ${M.title}`} confirm={id ? 'Bạn có chắc chắn muốn lưu thay đổi này?' : null} onSubmit={(fd) => R.saveMaster(db, user, col, id, Object.fromEntries(fd))}>
       <Row2>{M.fields.map((f) => (
         <Fld key={f.k} label={f.l}>
           {f.o ? <Sel name={f.k} required={f.req !== false} defaultValue={r[f.k]} options={f.o(db)} /> : <In name={f.k} type={f.t || 'text'} required={f.req !== false} defaultValue={r[f.k] ?? ''} min={f.min} />}
@@ -59,10 +49,9 @@ export function Crud({ col, rows }) {
   const { db, user, openModal, act } = useStore();
   const M = MASTER[col], can = R.can(user, M.perm), ask = useAsk();
   const del = (id) => {
-    const used = Object.keys(db).some((k) => k !== col && Array.isArray(db[k]) && db[k].some((x) => Object.entries(x).some(([key, v]) => key.endsWith('Id') && v === id)));
-    if (used) return act(() => fail(col === 'students' ? 'Học viên đã có dữ liệu đăng ký – hãy đặt trạng thái "Ngừng" thay vì xóa.' : 'Mục này đang được sử dụng nên không thể xóa.'));
+    if (R.isUsed(db, col, id)) return act(() => R.deleteMaster(db, user, col, id)); // báo lý do không xóa được
     const r = by(db, col, id);
-    ask({ title: 'Bạn có chắc chắn muốn xóa?', message: `“${r.name || r.code}” sẽ bị xóa vĩnh viễn và không thể khôi phục.`, ok: 'Xóa', danger: true, onConfirm: () => act(() => { R.need(user, M.perm); db[col] = db[col].filter((x) => x.id !== id); }, 'Đã xóa') });
+    ask({ title: 'Bạn có chắc chắn muốn xóa?', message: `“${r.name || r.code}” sẽ bị xóa vĩnh viễn và không thể khôi phục.`, ok: 'Xóa', danger: true, onConfirm: () => act(() => R.deleteMaster(db, user, col, id), 'Đã xóa') });
   };
   return (
     <Table head={[...M.cols.map((c) => c[1]), '']} rows={(rows || db[col]).map((r) => (

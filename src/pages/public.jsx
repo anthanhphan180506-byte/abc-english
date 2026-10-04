@@ -26,7 +26,7 @@ function LeadForm() {
   const submit = (e) => {
     e.preventDefault(); const fd = new FormData(e.target);
     db.leads.push({ id: U.id('ld'), name: fd.get('name').trim(), phone: fd.get('phone').trim(), course: fd.get('course'), note: fd.get('note').trim(), status: 'Mới', createdAt: U.today() });
-    commit(); e.target.reset(); toast('Đã gửi! ABC sẽ liên hệ với bạn trong ngày.', 'ok'); confetti();
+    if (commit()) { e.target.reset(); toast('Đã gửi! ABC sẽ liên hệ với bạn trong ngày.', 'ok'); confetti(); }
   };
   return (
     <Card className="p-6 shadow-xl shadow-indigo-900/10"><form onSubmit={submit}>
@@ -82,7 +82,8 @@ export function Landing() {
         <Wave />
       </section>
 
-      <Sec id="khoa-hoc" title="Chương trình đào tạo" sub={`Mỗi khóa gồm ${db.courses[0].sessions} buổi, học 2–3 buổi mỗi tuần.`}>
+      <Sec id="khoa-hoc" title="Chương trình đào tạo" sub={db.courses.length ? 'Số buổi và học phí từng khóa xem ở thẻ bên dưới.' : undefined}>
+        {!db.courses.length && <p className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500">Chương trình học đang được cập nhật. Vui lòng liên hệ trung tâm để được tư vấn.</p>}
         <div className="grid gap-5 md:grid-cols-3">{db.courses.map((c, i) => (
           <Reveal key={c.id} delay={(i % 3) * 110}>
             <Tilt className="h-full rounded-2xl"><Card className="group relative h-full overflow-hidden p-6">

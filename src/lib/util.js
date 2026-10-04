@@ -5,6 +5,7 @@ export const vnd = U.vnd;
 export const dmy = U.dmy;
 export const ROLE = { manager: 'Quản lý đào tạo', enroll: 'Nhân viên ghi danh', accountant: 'Kế toán', teacher: 'Giáo viên' };
 export const TYPE = { reserve: 'Bảo lưu', transfer: 'Chuyển lớp', makeup: 'Học bù' };
+export const canViewClass = (user) => !!user && ['manager', 'enroll'].includes(user.role); // vai trò có trang Lớp học
 export const cx = (...a) => a.filter(Boolean).join(' ');
 
 export const reqDesc = (db, r) => {

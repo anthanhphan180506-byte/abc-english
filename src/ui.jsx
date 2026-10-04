@@ -75,13 +75,13 @@ export function Confirm({ title, message, ok = 'Xác nhận', danger, onConfirm 
 export const useAsk = () => { const { openModal } = useStore(); return (o) => openModal(<Confirm {...o} />); };
 
 /* Hộp thoại có biểu mẫu. Nếu có prop `confirm`, bấm nút lưu sẽ hỏi lại "Bạn có chắc chắn?" trước khi thực hiện */
-export function Form({ title, children, onSubmit, ok = 'Lưu', lg, confirm, celebrate }) {
+export function Form({ title, children, onSubmit, ok = 'Lưu', lg, confirm, celebrate, onDone }) {
   const { closeModal, commit, toast } = useStore();
   const [err, setErr] = useState(''), [asking, setAsking] = useState(false);
   const submit = (e) => {
     e.preventDefault(); if (!onSubmit) return;
     if (confirm && !asking) { setErr(''); setAsking(true); return; }
-    try { const msg = onSubmit(new FormData(e.target)); closeModal(); commit(); toast(msg || 'Đã lưu', 'ok'); if (celebrate) confetti(); }
+    try { const msg = onSubmit(new FormData(e.target)); closeModal(); if (commit()) { toast(msg || 'Đã lưu', 'ok'); if (celebrate) confetti(); if (onDone) onDone(); } }
     catch (x) { setErr(x.message); setAsking(false); }
   };
   return (
