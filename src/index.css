@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --animate-fade-up: fade-up .55s cubic-bezier(.2, .7, .2, 1) both;
+  --animate-fade-in: fade-in .25s ease both;
+  --animate-pop: pop .26s cubic-bezier(.2, .9, .3, 1.15) both;
+  --animate-toast: toast .35s cubic-bezier(.2, .9, .3, 1.2) both;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-float-slow: float 11s ease-in-out infinite reverse;
+  --animate-gradient: gradient 14s ease infinite;
+  --animate-grow: grow .9s cubic-bezier(.2, .7, .2, 1) both;
+  --animate-shine: shine 3.2s ease-in-out infinite;
+
+  @keyframes fade-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.95); } to { opacity: 1; transform: none; } }
+  @keyframes toast { from { opacity: 0; transform: translateX(30px) scale(.95); } to { opacity: 1; transform: none; } }
+  @keyframes float { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(24px, -26px) scale(1.08); } }
+  @keyframes gradient { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+  @keyframes grow { from { width: 0; } }
+  --animate-orbit: orbit 22s linear infinite;
+  --animate-orbit-rev: orbit-rev 22s linear infinite;
+  --animate-marquee: marquee 50s linear infinite;
+  --animate-wave: wave 2.4s ease-in-out infinite;
+  --animate-bubble: bubble 5s ease-in-out infinite;
+  --animate-twinkle: twinkle 2.6s ease-in-out infinite;
+  --animate-blink: blink 1s steps(2, start) infinite;
+  --animate-ring: ring 2.6s ease-out infinite;
+  @keyframes orbit { to { transform: rotate(360deg); } }
+  @keyframes orbit-rev { to { transform: rotate(-360deg); } }
+  @keyframes marquee { to { transform: translateX(-50%); } }
+  @keyframes wave { 0%, 60%, 100% { transform: rotate(0); } 10%, 30% { transform: rotate(16deg); } 20% { transform: rotate(-8deg); } 40% { transform: rotate(-4deg); } 50% { transform: rotate(10deg); } }
+  @keyframes bubble { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-12px) scale(1.05); } }
+  @keyframes twinkle { 0%, 100% { opacity: .15; transform: scale(.6) rotate(0); } 50% { opacity: 1; transform: scale(1.3) rotate(45deg); } }
+  @keyframes blink { 50% { opacity: 0; } }
+  @keyframes ring { 0% { transform: scale(.8); opacity: .6; } 100% { transform: scale(1.9); opacity: 0; } }
+  @keyframes shine { 0% { transform: translateX(-120%) skewX(-20deg); } 60%, 100% { transform: translateX(260%) skewX(-20deg); } }
+}
+
+body { background: radial-gradient(1200px 500px at 85% -10%, #e0e7ff 0, transparent 60%), #f6f8fc; background-attachment: fixed; }
+::selection { background: #c7d2fe; }
+
+/* Hiệu ứng cuộn: phần tử hiện dần khi vào màn hình */
+.reveal { opacity: 0; transform: translateY(28px); transition: opacity .7s cubic-bezier(.2, .7, .2, 1), transform .7s cubic-bezier(.2, .7, .2, 1); }
+.reveal.in { opacity: 1; transform: none; }
+
+/* Các dòng bảng hiện lần lượt */
+.rows tr { animation: fade-up .45s cubic-bezier(.2, .7, .2, 1) both; }
+.rows tr:nth-child(1) { animation-delay: .02s } .rows tr:nth-child(2) { animation-delay: .06s } .rows tr:nth-child(3) { animation-delay: .10s }
+.rows tr:nth-child(4) { animation-delay: .14s } .rows tr:nth-child(5) { animation-delay: .18s } .rows tr:nth-child(6) { animation-delay: .22s }
+.rows tr:nth-child(7) { animation-delay: .26s } .rows tr:nth-child(8) { animation-delay: .30s } .rows tr:nth-child(n+9) { animation-delay: .34s }
+
+/* Thẻ nghiêng 3D + ánh sáng đi theo con trỏ */
+.tilt { transform: perspective(900px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); transition: transform .25s ease-out; transform-style: preserve-3d; position: relative; }
+.tilt.moving { transition: transform .05s linear; }
+.tilt::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity .3s;
+  background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), rgba(99, 102, 241, .22), transparent 60%); }
+.tilt:hover::after { opacity: 1; }
+.marquee-track:hover { animation-play-state: paused; }
+.progress-bar { transform-origin: 0 50%; }
+
+/* Ánh sáng quét qua nút nổi bật */
+.shine { position: relative; overflow: hidden; }
+.shine::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 40%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent); animation: shine 3.2s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  .reveal { opacity: 1; transform: none; }
+}
+@media print { .no-print { display: none !important; } body { background: #fff; } }
