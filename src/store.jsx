@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Seed } from './lib/seed.js';
 import { R } from './lib/rules.js';
+import { recordAudit } from './lib/audit.js';
 import { confetti } from './fx.jsx';
 
 const KEY = 'abc_center_db_react_v1', SKEY = 'abc_center_user_react';
@@ -20,7 +21,7 @@ function loadDb() {
   const raw = readRaw();
   if (raw) {
     let d = null; try { d = JSON.parse(raw); } catch { /* dữ liệu hỏng */ }
-    if (validateDb(d)) { R.syncExpiry(d); return { db: d, notice }; }
+    if (validateDb(d)) { R.syncAuto(d); return { db: d, notice }; } // thêm bảng mới nếu thiếu, cập nhật hạn bảo lưu/giữ chỗ
     try { localStorage.setItem(KEY + '_corrupt_' + Date.now(), raw); } catch { /* bỏ qua */ }
     notice = 'Dữ liệu đã lưu không hợp lệ nên đã được sao lưu riêng (khóa ' + KEY + '_corrupt_…) và hệ thống nạp lại dữ liệu demo.';
   }
@@ -29,7 +30,7 @@ function loadDb() {
     console.error('Seed.build lỗi', e); d = Seed.minimal();
     notice = (notice ? notice + ' ' : '') + 'Không tạo được dữ liệu demo đầy đủ nên đã nạp dữ liệu nền (chưa có lớp).';
   }
-  d.meta.rev = 0; write(d);
+  R.migrate(d); d.meta.rev = 0; write(d);
   return { db: d, notice };
 }
 
@@ -40,6 +41,8 @@ export function StoreProvider({ children }) {
   const [user, setUserState] = useState(() => { try { return db.users.find((u) => u.id === sessionStorage.getItem(SKEY)) || null; } catch { return null; } });
   const [toasts, setToasts] = useState([]);
   const [modal, setModal] = useState(null);
+  const snap = useRef(JSON.stringify(db)), userRef = useRef(null); // snap = trạng thái đã lưu gần nhất, dùng để lập nhật ký thay đổi
+  userRef.current = user;
 
   const toast = useCallback((msg, type) => {
     const id = Math.random();
@@ -49,7 +52,7 @@ export function StoreProvider({ children }) {
   useEffect(() => { if (boot.notice) toast(boot.notice, 'err'); }, [boot, toast]);
 
   const replaceDb = useCallback((d) => {
-    Object.keys(db).forEach((k) => delete db[k]); Object.assign(db, d);
+    Object.keys(db).forEach((k) => delete db[k]); Object.assign(db, d); snap.current = JSON.stringify(db);
     setUserState((u) => (u ? db.users.find((x) => x.id === u.id) || null : u)); setVer((v) => v + 1);
   }, [db]);
   const reload = useCallback(() => { // nạp lại bản đã lưu (bỏ thay đổi chưa lưu)
@@ -58,18 +61,20 @@ export function StoreProvider({ children }) {
   }, [replaceDb]);
 
   /* Lưu dữ liệu. Trả về true khi đã lưu. Thất bại (hết dung lượng, bị chặn, tab khác đã ghi trước) thì hoàn tác và báo lỗi rõ ràng. */
-  const commit = useCallback(() => {
+  const commit = useCallback((label) => {
     if (storedRev() !== (db.meta.rev || 0)) {
       reload(); toast('Dữ liệu đã được thay đổi ở tab/cửa sổ khác. Đã tải bản mới nhất – hãy thực hiện lại thao tác vừa rồi.', 'err'); return false;
     }
     db.meta.rev = (db.meta.rev || 0) + 1;
+    let entry = null; try { entry = recordAudit(db, JSON.parse(snap.current), userRef.current, label); } catch { /* nhật ký lỗi không được chặn việc lưu */ }
     if (!write(db)) {
+      if (entry) db.audit.pop();
       db.meta.rev -= 1;
       const rolledBack = reload();
       if (!rolledBack) setUnsaved(true);
       toast('Không lưu được dữ liệu (bộ nhớ trình duyệt đầy hoặc bị chặn). ' + (rolledBack ? 'Thao tác vừa rồi đã được hoàn tác.' : 'Thay đổi chỉ tồn tại tạm thời – hãy bấm “Sao lưu dữ liệu”.'), 'err'); return false;
     }
-    setUnsaved(false); setVer((v) => v + 1); return true;
+    snap.current = JSON.stringify(db); setUnsaved(false); setVer((v) => v + 1); return true;
   }, [db, reload, toast]);
 
   // Tab khác ghi dữ liệu → đồng bộ ngay để không ghi đè mất thay đổi
@@ -79,13 +84,15 @@ export function StoreProvider({ children }) {
   }, [reload, toast]);
 
   const act = useCallback((fn, okMsg, celebrate) => { // chạy một thao tác nghiệp vụ, báo kết quả bằng toast
-    try { const r = fn(); if (!commit()) return false; toast(typeof r === 'string' ? r : okMsg || 'Thành công', 'ok'); if (celebrate) confetti(); return true; }
+    try { const r = fn(); if (!commit((typeof r === 'string' ? r : okMsg) || 'Thao tác')) return false; toast(typeof r === 'string' ? r : okMsg || 'Thành công', 'ok'); if (celebrate) confetti(); return true; }
     catch (e) { toast(e.message, 'err'); return false; }
   }, [commit, toast]);
-  const setUser = useCallback((u) => { setUserState(u); try { u ? sessionStorage.setItem(SKEY, u.id) : sessionStorage.removeItem(SKEY); } catch { /* bỏ qua */ } }, []);
+  const setUser = useCallback((u) => {
+    if (u) { const n = R.syncAuto(db); if (n.holds || n.reservations) commit('Tự động cập nhật giữ chỗ quá hạn / hạn bảo lưu'); }
+    setUserState(u); try { u ? sessionStorage.setItem(SKEY, u.id) : sessionStorage.removeItem(SKEY); } catch { /* bỏ qua */ } }, [db, commit]);
   const reset = useCallback(() => {
     const fresh = Seed.build(); fresh.meta.rev = storedRev(); replaceDb(fresh);
-    if (commit()) toast('Đã khôi phục dữ liệu demo', 'ok');
+    if (commit('Khôi phục dữ liệu demo')) toast('Đã khôi phục dữ liệu demo', 'ok');
   }, [replaceDb, commit, toast]);
 
   const exportData = useCallback(() => {
@@ -96,7 +103,7 @@ export function StoreProvider({ children }) {
     try {
       const d = JSON.parse(await file.text());
       if (!validateDb(d)) throw new Error('Tệp không phải bản sao lưu hợp lệ của hệ thống (thiếu bảng dữ liệu).');
-      d.meta.rev = storedRev(); replaceDb(d); if (commit()) toast('Đã nạp bản sao lưu', 'ok');
+      R.migrate(d); d.meta.rev = storedRev(); replaceDb(d); if (commit('Nạp bản sao lưu')) toast('Đã nạp bản sao lưu', 'ok');
     } catch (e) { toast(e.message || 'Không đọc được tệp sao lưu.', 'err'); }
   }, [replaceDb, commit, toast]);
 

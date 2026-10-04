@@ -27,9 +27,40 @@ Chạy `npm test`: **38/38 ca đạt** (23 ca cũ + 15 ca hồi quy mới).
 
 Lỗi nhỏ phát sinh khi kiểm tra và đã sửa luôn: form **Tạo lớp** từng chuyển trang trước khi lưu xong (nếu lưu thất bại sẽ mở trang lớp không tồn tại); nay chỉ chuyển sau khi lưu thành công (`onDone`).
 
-## Chưa làm / cần quyết định
+## Giai đoạn 2 – tính năng nghiệp vụ còn thiếu (Đợt 2 của báo cáo) và chính sách mặc định
 
-- **Các câu hỏi chính sách mục 5 của báo cáo** (tiền khi chuyển lớp sau khi đã học một phần, công thức bảo lưu khi đóng một phần, giữ chỗ học bù khi gửi hay khi duyệt, hủy đăng ký riêng/hoàn tiền, ai sửa điểm danh cũ…): giữ nguyên hành vi hiện tại, chờ giảng viên chốt.
-- **Đợt 2–5 của báo cáo** (hủy đăng ký riêng, hoàn tiền/sổ số dư, đổi một buổi học, lọc/phân trang phiếu thu, tách service, backend + CSDL, hồ sơ M1–M4, kiểm thử trình duyệt thật/responsive/bàn phím): chưa thực hiện, là công việc tiếp theo.
-- **Đa người dùng thật** (nhiều nhân viên/chi nhánh dùng chung dữ liệu, form tư vấn của khách đến máy nhân viên): cần backend; B15 mới chỉ giảm thiểu rủi ro mất dữ liệu giữa các tab.
-- README nay ghi đúng **38 ca** kiểm thử; mã ca hồi quy dùng trực tiếp mã lỗi (B01…B19); mã TC riêng và ma trận truy vết BR→FR→UC→TC vẫn là việc của bộ hồ sơ M2.
+Các câu hỏi chính sách ở mục 5 của báo cáo chưa được giảng viên chốt. Nhóm **chọn mặc định hợp lý**, đưa vào hằng số `CFG` ở `src/lib/rules.js` và ghi rõ là **giả định cần xác nhận** (đổi bằng một dòng):
+
+| # | Câu hỏi của báo cáo | Mặc định đã chọn | Hằng số / vị trí |
+|---|---|---|---|
+| 1 | Chuyển lớp sau khi đã học một phần: chuyển toàn bộ tiền hay trừ buổi đã học? | **Trừ giá trị buổi đã học**: tiền chuyển = đã đóng − học phí × (số buổi đã học / tổng số buổi), tối thiểu 0 | `R.refundable`, `R.X.transfer` |
+| 2 | Bảo lưu khi mới đóng một phần: công thức nào? | Cùng công thức mục 1 (ví dụ phí 3,6 triệu, đóng 1,8 triệu, học 12/24 buổi → giữ lại 0 ₫; đóng đủ thì giữ lại 1,8 triệu) | `R.X.reserve` |
+| 3 | Học viên được đóng nợ sau khi hoàn thành không? | **Có** (đã làm ở B03) | `R.COLLECTIBLE` |
+| 4 | Hủy đăng ký riêng, hoàn tiền: ai có quyền, phí phạt, duyệt, lịch sử? | Nhân viên ghi danh/quản lý **tạo yêu cầu "Hủy đăng ký"**, **Quản lý duyệt**; tiền hoàn = công thức mục 1, vào **số dư học viên**; kế toán **hoàn tiền mặt/chuyển khoản** từ số dư; không có phí phạt riêng. Mọi biến động ghi vào **sổ số dư** | `R.V/X.cancel`, `R.refundBalance`, `R._balance` |
+| 5 | Học bù giữ chỗ lúc gửi hay lúc duyệt? | **Lúc gửi** (yêu cầu đang chờ cũng chiếm chỗ và lịch của học viên) | `R.V.makeup` |
+| 6 | Ai sửa điểm danh cũ? | Giáo viên sửa trong **7 ngày**; sau đó **chỉ Quản lý** và **bắt buộc ghi lý do**; mọi lần đổi trạng thái lưu lịch sử | `CFG.attendanceEditDays`, `R.markAttendance` |
+| 7 | Học viên bảo lưu có tiếp tục buổi bù đã duyệt? | **Không**: bảo lưu/chuyển lớp/hủy đăng ký thì các yêu cầu học bù còn hiệu lực tự hủy | `R._dropMakeups` |
+| 8 | Đợt đào tạo bắt buộc đúng quý hay linh hoạt? Lớp có kết thúc ở quý sau được không? | Đợt phải kéo dài **đúng 3 tháng** (bắt đầu ngày nào cũng được); lớp mở trong đợt **được phép** kết thúc ở đợt sau | `CFG.termMonths`, `R.saveMaster` |
+| 9 | Thời hạn giữ chỗ cho đăng ký "Chờ đóng phí" | **7 ngày** cho lớp chưa khai giảng; quá hạn tự hủy và hoàn tiền đã đóng (nếu có) vào số dư. Lớp đang học không áp dụng | `CFG.holdDays`, `R.expireHolds` |
+| 10 | Điều kiện kết thúc lớp | Đã học ≥ 1 buổi; chưa đủ buổi thì cần lý do (đã làm ở B04) | `R.finishClass` |
+
+Tính năng mới (đều có ca kiểm thử):
+
+| Tính năng | Nơi dùng |
+|---|---|
+| **Hủy đăng ký riêng** (yêu cầu + duyệt, hoàn vào số dư) | Đăng ký học → nút *Hủy đăng ký*; Yêu cầu |
+| **Sổ số dư có lịch sử** và **Hoàn tiền** | Hồ sơ học viên (bảng *Sổ số dư*); Học phí → *Học viên còn số dư* |
+| **Hủy phiếu thu** (không xóa, lưu lý do/người hủy; trả số dư; đăng ký quay về *Chờ đóng phí* nếu dưới 50%) | Học phí → nút *Hủy phiếu* |
+| **Đổi một buổi học** (ngày/giờ/phòng/giáo viên thay thế) kiểm tra lại giáo viên, phòng, học viên, học viên học bù; lưu lịch sử | Chi tiết lớp → *Đổi buổi* |
+| **Giữ chỗ hết hạn** tự động | Khi mở ứng dụng / đăng nhập |
+| **Phân trang và lọc** phiếu thu (tìm, theo ngày, ẩn/hiện phiếu hủy); **lọc điểm danh theo khoảng ngày** | Học phí; Điểm danh |
+| **Báo cáo** lọc theo đợt và khoảng ngày; phân biệt *số đăng ký* và *học viên không trùng*; số tiền đã hoàn; **xuất CSV** | Báo cáo |
+| **Nhật ký thao tác**: ai, lúc nào, làm gì, giá trị trước → sau (500 mục gần nhất) | Menu *Nhật ký* (Quản lý) |
+
+Bộ kiểm thử nay là **51 ca** (38 + 13 ca cho các tính năng và chính sách trên; mã ca `POL-*`, `LEDGER`, `VOID`, `RESCHED`, `HOLD`, `ATT-EDIT`, `TERM`, `AUDIT`).
+
+## Chưa làm
+
+- **Backend / CSDL dùng chung** cho nhiều nhân viên và chi nhánh, xác thực máy chủ, mật khẩu băm, form tư vấn của khách đến máy nhân viên (Đợt 3): dữ liệu vẫn lưu trong trình duyệt. B15 chỉ ở mức giảm thiểu.
+- **Hồ sơ học phần M1–M4** (biên bản phỏng vấn, use case, UML, ma trận truy vết, Test Plan, nhật ký nhóm) và **kiểm thử trình duyệt thật** (responsive, bàn phím, in ấn) (Đợt 4–5).
+- Các mặc định ở bảng trên **vẫn cần giảng viên xác nhận**; nếu giảng viên chọn khác, chỉ cần đổi hằng số hoặc một hàm nhỏ tương ứng.

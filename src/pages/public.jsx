@@ -26,7 +26,7 @@ function LeadForm() {
   const submit = (e) => {
     e.preventDefault(); const fd = new FormData(e.target);
     db.leads.push({ id: U.id('ld'), name: fd.get('name').trim(), phone: fd.get('phone').trim(), course: fd.get('course'), note: fd.get('note').trim(), status: 'Mới', createdAt: U.today() });
-    if (commit()) { e.target.reset(); toast('Đã gửi! ABC sẽ liên hệ với bạn trong ngày.', 'ok'); confetti(); }
+    if (commit('Gửi yêu cầu tư vấn')) { e.target.reset(); toast('Đã gửi! ABC sẽ liên hệ với bạn trong ngày.', 'ok'); confetti(); }
   };
   return (
     <Card className="p-6 shadow-xl shadow-indigo-900/10"><form onSubmit={submit}>

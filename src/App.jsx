@@ -1,14 +1,14 @@
 import { Component, useEffect, useRef } from 'react';
 import { StoreProvider, useStore, useHash } from './store.jsx';
 import { Landing, Login } from './pages/public.jsx';
-import { Dashboard, Classes, ClassDetail, Enrollments, Payments, Requests, Attendance, Timetable, Leads, Reports } from './pages/pages.jsx';
+import { Dashboard, Classes, ClassDetail, Enrollments, Payments, Requests, Attendance, Timetable, Leads, Reports, AuditPage } from './pages/pages.jsx';
 import { Students, Master, Staff } from './pages/master.jsx';
 import { ROLE } from './lib/util.js';
 import { useAsk } from './ui.jsx';
 
-const MENU = { dashboard: ['📊', 'Tổng quan'], classes: ['🏫', 'Lớp học'], timetable: ['🗓️', 'Thời khóa biểu'], students: ['🎓', 'Học viên'], enrollments: ['📝', 'Đăng ký học'], payments: ['💳', 'Học phí'], requests: ['📨', 'Bảo lưu · Chuyển lớp · Học bù'], attendance: ['✅', 'Điểm danh'], staff: ['👥', 'Nhân viên'], master: ['⚙️', 'Danh mục'], leads: ['📞', 'Tư vấn'], reports: ['📈', 'Báo cáo'] };
+const MENU = { dashboard: ['📊', 'Tổng quan'], classes: ['🏫', 'Lớp học'], timetable: ['🗓️', 'Thời khóa biểu'], students: ['🎓', 'Học viên'], enrollments: ['📝', 'Đăng ký học'], payments: ['💳', 'Học phí'], requests: ['📨', 'Bảo lưu · Chuyển lớp · Học bù'], attendance: ['✅', 'Điểm danh'], staff: ['👥', 'Nhân viên'], master: ['⚙️', 'Danh mục'], leads: ['📞', 'Tư vấn'], reports: ['📈', 'Báo cáo'], audit: ['🕘', 'Nhật ký'] };
 const ROLE_MENU = { manager: Object.keys(MENU), enroll: ['dashboard', 'students', 'classes', 'enrollments', 'requests', 'timetable', 'leads'], accountant: ['dashboard', 'payments', 'enrollments', 'reports'], teacher: ['dashboard', 'timetable', 'attendance'] };
-const PAGES = { dashboard: Dashboard, classes: Classes, timetable: Timetable, students: Students, enrollments: Enrollments, payments: Payments, requests: Requests, attendance: Attendance, staff: Staff, master: Master, leads: Leads, reports: Reports };
+const PAGES = { dashboard: Dashboard, classes: Classes, timetable: Timetable, students: Students, enrollments: Enrollments, payments: Payments, requests: Requests, attendance: Attendance, staff: Staff, master: Master, leads: Leads, reports: Reports, audit: AuditPage };
 
 function Shell({ page = 'dashboard', arg }) {
   const { user, setUser, reset, exportData, importData } = useStore(), ask = useAsk(), fileRef = useRef(null);

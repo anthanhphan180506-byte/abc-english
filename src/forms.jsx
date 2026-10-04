@@ -135,6 +135,8 @@ export function ProfileView({ id }) {
       </dl>
       <H3>Các lần đăng ký</H3>
       <Table head={['Lớp', 'Trạng thái', 'Học phí', 'Đã đóng']} right={[2, 3]} rows={ens.map((e) => <tr key={e.id}><td>{by(db, 'classes', e.classId).code}</td><td><Badge t={e.status} /></td><td className="text-right">{vnd(e.fee)}</td><td className="text-right">{vnd(R.paid(db, e.id))}</td></tr>)} />
+      <H3>Sổ số dư {R.can(user, 'pay') && s.balance > 0 && <Btn sm className="ml-2" onClick={() => openModal(<RefundForm studentId={id} />)}>Hoàn tiền</Btn>}</H3>
+      <Table head={['Ngày', 'Nội dung', 'Ghi chú', 'Biến động', 'Số dư sau']} right={[3, 4]} rows={(db.ledger || []).filter((l) => l.studentId === id).slice().reverse().map((l) => <tr key={l.id}><td>{dmy(l.date)}</td><td>{l.type}</td><td>{l.note}</td><td className={`text-right font-semibold ${l.amount < 0 ? 'text-red-600' : 'text-green-700'}`}>{l.amount > 0 ? '+' : ''}{vnd(l.amount)}</td><td className="text-right">{vnd(l.balanceAfter)}</td></tr>)} />
       <H3>Bảo lưu</H3>
       <Table head={['Lớp', 'Học phí giữ lại', 'Hạn', 'Trạng thái', '']} rows={rvs.map((v) => {
         const st = R.rvStatus(v);
@@ -165,6 +167,66 @@ export function FinishForm({ id }) {
       <p className="mb-3">Đã học <b>{done}/{total}</b> buổi. Học viên đã xác nhận được ghi nhận <b>Hoàn thành</b>; khoản học phí còn nợ (nếu có) vẫn thu được ở trang Học phí.</p>
       {done === 0 && <p className="mb-3 font-semibold text-red-600">Lớp chưa học buổi nào nên chưa thể kết thúc.</p>}
       {done > 0 && done < total && <Fld label="Lý do kết thúc sớm (bắt buộc)"><Area required name="reason" /></Fld>}
+    </Form>
+  );
+}
+
+export function CancelForm({ eid }) {
+  const { db, user } = useStore();
+  const e = by(db, 'enrollments', eid); let ctx = null, err = '';
+  try { ctx = R.V.cancel(db, { enrollmentId: eid }); } catch (x) { err = x.message; }
+  return (
+    <Form title="Yêu cầu hủy đăng ký" ok="Gửi yêu cầu" onSubmit={(fd) => { R.createRequest(db, user, 'cancel', { enrollmentId: eid }, fd.get('reason')); return 'Đã gửi yêu cầu hủy đăng ký – chờ duyệt'; }}>
+      <p className="mb-3"><b>{enLabel(db, e)}</b></p>
+      {err ? <p className="mb-3 font-semibold text-red-600">{err}</p> : (
+        <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-[13.5px] text-amber-900">
+          Đã đóng <b>{vnd(ctx.paid)}</b> − giá trị buổi đã học <b>{vnd(ctx.studied)}</b> = hoàn <b>{vnd(ctx.refund)}</b> vào số dư học viên (sau đó kế toán hoàn tiền mặt/chuyển khoản). Các buổi học bù đã xin sẽ bị hủy.
+        </div>
+      )}
+      <Fld label="Lý do hủy"><Area required name="reason" /></Fld>
+    </Form>
+  );
+}
+
+export function RescheduleForm({ sid }) {
+  const { db, user } = useStore();
+  const s = by(db, 'sessions', sid), c = by(db, 'classes', s.classId);
+  return (
+    <Form title={`Đổi buổi ${s.no} – lớp ${c.code}`} ok="Lưu thay đổi" confirm="Bạn có chắc chắn muốn đổi buổi học này?" onSubmit={(fd) => R.rescheduleSession(db, user, sid, Object.fromEntries(fd))}>
+      <p className="mb-3 text-slate-600">Hiện tại: {dmy(s.date)} {s.start}-{s.end}, phòng {by(db, 'rooms', s.roomId).name}, {by(db, 'teachers', s.teacherId).name}.</p>
+      <Row2>
+        <Fld label="Ngày học mới"><In required type="date" name="date" defaultValue={s.date} min={U.today()} /></Fld>
+        <Fld label="Giáo viên (đổi nếu cần thay thế)"><Sel required name="teacherId" defaultValue={s.teacherId} options={db.teachers.filter((x) => x.status === 'Đang dạy').map((x) => [x.id, x.name])} /></Fld>
+        <Fld label="Giờ bắt đầu"><In required type="time" name="start" defaultValue={s.start} /></Fld>
+        <Fld label="Giờ kết thúc"><In required type="time" name="end" defaultValue={s.end} /></Fld>
+      </Row2>
+      <Fld label="Phòng học"><Sel required name="roomId" defaultValue={s.roomId} options={db.rooms.filter((r) => r.branchId === c.branchId).map((r) => [r.id, r.name])} /></Fld>
+      <Fld label="Lý do đổi (bắt buộc)"><Area required name="reason" /></Fld>
+      <Hint>Hệ thống kiểm tra lại trùng giáo viên, phòng, lịch của từng học viên và học viên học bù vào buổi này.</Hint>
+    </Form>
+  );
+}
+
+export function VoidForm({ pid }) {
+  const { db, user } = useStore();
+  const p = by(db, 'payments', pid);
+  return (
+    <Form title={`Hủy phiếu thu ${p.no}`} ok="Hủy phiếu" confirm="Phiếu thu sẽ bị đánh dấu hủy (vẫn lưu lịch sử). Bạn có chắc chắn?" onSubmit={(fd) => R.voidPayment(db, user, pid, fd.get('reason'))}>
+      <p className="mb-3">{vnd(p.amount)} · {p.method} · {dmy(p.date)} · {by(db, 'students', p.studentId).name}</p>
+      <Fld label="Lý do hủy (bắt buộc)"><Area required name="reason" /></Fld>
+    </Form>
+  );
+}
+
+export function RefundForm({ studentId }) {
+  const { db, user } = useStore();
+  const st = by(db, 'students', studentId);
+  return (
+    <Form title={`Hoàn tiền – ${st.name}`} ok="Ghi nhận hoàn tiền" confirm="Bạn có chắc chắn đã hoàn số tiền này cho học viên?" onSubmit={(fd) => R.refundBalance(db, user, studentId, { amount: fd.get('amount'), method: fd.get('method'), note: fd.get('note') })}>
+      <p className="mb-3">Số dư hiện có: <b>{vnd(st.balance)}</b></p>
+      <Fld label="Số tiền hoàn (₫)"><In required type="number" name="amount" defaultValue={st.balance} min="1" max={st.balance} /></Fld>
+      <Fld label="Hình thức"><Sel required name="method" options={[['Tiền mặt', 'Tiền mặt'], ['Chuyển khoản', 'Chuyển khoản']]} /></Fld>
+      <Fld label="Ghi chú"><In name="note" /></Fld>
     </Form>
   );
 }

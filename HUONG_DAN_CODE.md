@@ -15,7 +15,7 @@ Tài liệu này giải thích dự án được tổ chức thế nào, dữ li
 
 ```bash
 npm run dev      # chạy thử, mở http://localhost:5173
-npm test         # chạy 38 ca kiểm thử luật nghiệp vụ (không cần trình duyệt)
+npm test         # chạy 51 ca kiểm thử luật nghiệp vụ (không cần trình duyệt)
 npm run build    # đóng gói vào thư mục dist/
 ```
 
@@ -42,7 +42,7 @@ abc-english-react/
    ├─ lib/
    │  ├─ rules.js          ★ TOÀN BỘ LUẬT NGHIỆP VỤ và phân quyền (không dính React)
    │  ├─ seed.js           Dữ liệu nền và dữ liệu demo
-   │  ├─ tests.js          38 ca kiểm thử
+   │  ├─ tests.js          51 ca kiểm thử
    │  └─ util.js           Hàm nhỏ: by(), vnd, dmy, ROLE, TYPE, reqDesc...
    └─ pages/
       ├─ public.jsx        Trang giới thiệu (Landing) và Đăng nhập (Login)
@@ -78,7 +78,7 @@ flowchart TD
 - `Router` (trong `App.jsx`) chọn trang theo phần tử đầu: rỗng → Landing, `login` → Login, `app` → Shell.
 - `Shell` kiểm tra vai trò: nếu menu của vai trò không có trang đó thì quay về Tổng quan.
 
-Địa chỉ trang quản trị: `#/app/<trang>` với `dashboard, classes, timetable, students, enrollments, payments, requests, attendance, staff, master, leads, reports`; riêng chi tiết lớp là `#/app/class/<id>`.
+Địa chỉ trang quản trị: `#/app/<trang>` với `dashboard, classes, timetable, students, enrollments, payments, requests, attendance, staff, master, leads, reports, audit`; riêng chi tiết lớp là `#/app/class/<id>`.
 
 ---
 
@@ -209,6 +209,10 @@ Bảng hàm chính (đều nhận `db` và `user`; có kiểm tra quyền bằng
 | `deleteClass` | Xóa lớp và các buổi học | lớp không phải Nháp/Đã hủy, lớp đã có dữ liệu đăng ký (giữ lịch sử) |
 | `saveUser` | Thêm/sửa tài khoản nhân viên (tên đăng nhập, vai trò, mật khẩu, giáo viên liên kết) | trùng tên đăng nhập, mật khẩu < 6 ký tự, giáo viên chưa gắn hồ sơ, tự hạ quyền, hạ quyền Quản lý cuối cùng |
 | `deleteUser` | Xóa tài khoản | xóa chính mình, xóa Quản lý cuối cùng |
+| `rescheduleSession` | Đổi ngày/giờ/phòng/giáo viên của một buổi học, lưu lịch sử | buổi đã học, ngày quá khứ, thiếu lý do, trùng giáo viên/phòng/học viên/học viên học bù |
+| `refundBalance` | Hoàn tiền mặt/chuyển khoản từ số dư học viên | vượt số dư, hình thức sai, không có quyền |
+| `voidPayment` | Hủy phiếu thu (giữ lịch sử, trả số dư nếu là phiếu trừ số dư) | thiếu lý do, đã hủy, đăng ký đã chuyển/bảo lưu/hủy |
+| `expireHolds` | Tự hủy đăng ký chưa đóng đủ mức xác nhận quá 7 ngày ở lớp chưa khai giảng | (chạy khi mở ứng dụng/đăng nhập) |
 | `openRegistration` | Nháp → Mở đăng ký | chưa xếp lịch |
 | `enrollCheck` | Điều kiện đưa học viên vào lớp, dùng chung cho ghi danh, chuyển lớp, học lại | học viên ngừng, lớp chưa mở, hết chỗ, trùng khóa/đợt, trùng lịch |
 | `saveMaster` / `deleteMaster` | CRUD danh mục (học viên, giáo viên, chi nhánh, phòng, khóa, đợt) có kiểm tra sau trim và chặn sửa/xóa mục đang dùng | trường rỗng/sai định dạng, mục đang có lớp/lịch, đổi chi nhánh của phòng có lịch |
@@ -367,6 +371,14 @@ Thêm một mục vào `MASTER` trong `pages/master.jsx` (cols = cột bảng, f
 Tài khoản ở `Seed.minimal().users`; vai trò mới cần thêm vào `PERMS` (rules.js), `ROLE` (util.js) và `ROLE_MENU` (App.jsx). Muốn áp dụng dữ liệu seed mới: bấm "↺ Khôi phục dữ liệu demo" ở thanh bên (tài khoản quản lý) hoặc xóa localStorage.
 
 ---
+
+### Nhật ký thao tác (`lib/audit.js`)
+
+`store.jsx` giữ bản chụp dữ liệu ở lần lưu gần nhất. Mỗi lần `commit(nhãn)`, `recordAudit` so sánh bản chụp với dữ liệu mới theo từng bảng (thêm/xóa/sửa, giá trị trước → sau) rồi ghi vào `db.audit` (tối đa 500 mục). Nhờ vậy **mọi chức năng đều được ghi nhật ký tự động**, không cần gọi riêng. Trang *Nhật ký* (Quản lý) hiển thị, tìm kiếm và phân trang.
+
+### Tiền: sổ số dư và chính sách
+- Mọi biến động số dư học viên đi qua `R._balance` và được ghi vào `db.ledger` (ngày, loại, số tiền ±, số dư sau).
+- Công thức khi rời lớp giữa chừng (bảo lưu, chuyển lớp, hủy đăng ký): **tiền giữ lại = đã đóng − học phí × số buổi đã học / tổng số buổi** (`R.refundable`). Đây là giả định, xem `BAO_CAO_SUA_LOI.md`.
 
 ### An toàn dữ liệu lưu trữ (`store.jsx`)
 

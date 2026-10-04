@@ -1,5 +1,6 @@
 import { R, U, CFG, RuleError } from './rules.js';
 import { Seed } from './seed.js';
+import { recordAudit } from './audit.js';
 /* tests.js – ca kiểm thử bám theo luật nghiệp vụ (chạy trong trang "Kiểm thử" hoặc bằng node run-tests.js).
  * Mỗi ca chạy trên một CSDL mới, không ảnh hưởng dữ liệu thật. */
 const Tests = (() => {
@@ -21,6 +22,7 @@ const Tests = (() => {
       const e = R._enroll(db, st.id, c.id); if (paid) R.addPayment(db, ACC, e.id, { amount: e.fee, method: 'Tiền mặt' });
     }
   };
+  const active = () => { const db = fresh(), c = mkClass(db); fill(db, c, CFG.minStudents); R.confirmOpen(db, S, c.id); return { db, c }; }; // lớp đang học có 10 học viên đã đóng đủ
   const throws = (fn, re) => { try { fn(); } catch (e) { if (!(e instanceof RuleError)) throw e; if (re && !re.test(e.message)) throw new Error('Sai thông báo lỗi: ' + e.message); return; } throw new Error('Đáng lẽ phải bị từ chối nhưng đã thành công.'); };
   const eq = (a, b, m) => { if (a !== b) throw new Error(`${m || 'Giá trị'}: mong đợi ${b}, thực tế ${a}`); };
 
@@ -295,6 +297,109 @@ const Tests = (() => {
       throws(() => R.saveMaster(db, S, 'courses', null, { code: 'X', name: 'X', level: 1, fee: -5, sessions: 24 }), /Học phí/);
       const n = db.students.length; R.saveMaster(db, ENR, 'students', null, ok); eq(db.students.length, n + 1, 'Số học viên');
       throws(() => R.saveMaster(db, ENR, 'courses', null, { code: 'X', name: 'X', level: 1, fee: 1000, sessions: 24 }), /không có quyền/);
+    }],
+    ['POL-01', 'Hủy đăng ký giữa chừng: hoàn tiền = đã đóng − giá trị buổi đã học, ghi sổ số dư', () => {
+      const { db, c } = active(); R.sessions(db, c.id).slice(0, 6).forEach((s) => { s.held = true; });
+      const e = R.confirmed(db, c.id)[0];
+      R.approve(db, S, R.createRequest(db, ENR, 'cancel', { enrollmentId: e.id }, 'chuyển nhà').id);
+      eq(R.by(db, 'enrollments', e.id).status, 'Đã hủy'); eq(R.by(db, 'students', e.studentId).balance, Math.round(e.fee * 18 / 24), 'Số dư');
+      eq(db.ledger.length, 1, 'Số dòng sổ số dư'); eq(db.ledger[0].amount, Math.round(e.fee * 18 / 24), 'Số tiền ghi sổ');
+    }],
+    ['POL-02', 'Hủy đăng ký ở lớp chưa khai giảng: hoàn đủ học phí đã đóng', () => {
+      const db = fresh(), c = mkClass(db); fill(db, c, 1, true); const e = db.enrollments[0];
+      R.approve(db, S, R.createRequest(db, ENR, 'cancel', { enrollmentId: e.id }, 'đổi ý').id);
+      eq(R.by(db, 'students', e.studentId).balance, e.fee, 'Số dư');
+    }],
+    ['POL-03', 'Chuyển lớp sau khi đã học dở: chỉ chuyển phần tiền chưa dùng cho buổi đã học', () => {
+      const { db, c } = active(), b = mkClass(db, { branch: 'br2', s: { roomId: 'br2r1', teacherId: 'gv3' } });
+      R.sessions(db, c.id).slice(0, 12).forEach((s) => { s.held = true; });
+      const e = R.confirmed(db, c.id)[0];
+      R.approve(db, S, R.createRequest(db, ENR, 'transfer', { enrollmentId: e.id, toClassId: b.id }, 'đổi chi nhánh').id);
+      const n = db.enrollments.find((x) => x.transferredFrom === e.id);
+      eq(R.paid(db, n.id), e.fee / 2, 'Tiền chuyển sang'); eq(R.due(db, n), e.fee / 2, 'Còn phải đóng ở lớp mới');
+    }],
+    ['POL-04', 'Bảo lưu khi mới đóng một phần: tiền giữ lại = đã đóng − giá trị buổi đã học (không âm)', () => {
+      const db = fresh(), c = mkClass(db); fill(db, c, CFG.minStudents - 1); fill(db, c, 1, false, 200);
+      const e = db.enrollments[db.enrollments.length - 1]; R.addPayment(db, ACC, e.id, { amount: e.fee / 2, method: 'Tiền mặt' });
+      R.confirmOpen(db, S, c.id); R.sessions(db, c.id).slice(0, 12).forEach((s) => { s.held = true; });
+      R.approve(db, S, R.createRequest(db, ENR, 'reserve', { enrollmentId: e.id }, 'bận').id); eq(db.reservations[0].credit, 0, 'Tiền giữ lại');
+    }],
+    ['POL-05', 'Hủy đăng ký / bảo lưu / chuyển lớp: các buổi học bù đã xin tự hủy', () => {
+      const { db, c: a } = active(), b = mkClass(db, { branch: 'br2', s: { roomId: 'br2r1', teacherId: 'gv3' } }); fill(db, b, CFG.minStudents, true, 100); R.confirmOpen(db, S, b.id);
+      const e = R.confirmed(db, a.id)[0], s1 = R.sessions(db, a.id)[0]; s1.held = true;
+      db.attendance.push({ id: 'a1', sessionId: s1.id, enrollmentId: e.id, studentId: e.studentId, status: 'Vắng' });
+      const tg = R.sessions(db, b.id)[0]; tg.date = U.addDays(U.today(), 2);
+      const mk = R.createRequest(db, ENR, 'makeup', { enrollmentId: e.id, missedSessionId: s1.id, targetSessionId: tg.id }, 'x'); R.approve(db, S, mk.id);
+      R.approve(db, S, R.createRequest(db, ENR, 'cancel', { enrollmentId: e.id }, 'x').id);
+      eq(R.by(db, 'requests', mk.id).status, 'Đã hủy', 'Yêu cầu học bù');
+    }],
+    ['POL-06', 'Học bù giữ chỗ ngay khi gửi yêu cầu (yêu cầu đang chờ cũng chiếm chỗ)', () => {
+      const { db, c: a } = active(), b = mkClass(db, { branch: 'br2', s: { roomId: 'br2r1', teacherId: 'gv3' } });
+      fill(db, b, CFG.minStudents, true, 100); R.confirmOpen(db, S, b.id);
+      const tg = R.sessions(db, b.id)[0]; tg.date = U.addDays(U.today(), 2); R.by(db, 'rooms', 'br2r1').capacity = CFG.minStudents + 1; // còn đúng 1 chỗ
+      const [e1, e2] = R.confirmed(db, a.id), s1 = R.sessions(db, a.id)[0]; s1.held = true;
+      [e1, e2].forEach((e) => db.attendance.push({ id: 'a' + e.id, sessionId: s1.id, enrollmentId: e.id, studentId: e.studentId, status: 'Vắng' }));
+      R.createRequest(db, ENR, 'makeup', { enrollmentId: e1.id, missedSessionId: s1.id, targetSessionId: tg.id }, 'x'); // đang chờ duyệt
+      throws(() => R.createRequest(db, ENR, 'makeup', { enrollmentId: e2.id, missedSessionId: s1.id, targetSessionId: tg.id }, 'x'), /hết chỗ/);
+    }],
+    ['LEDGER', 'Hoàn tiền từ số dư: không vượt số dư, ghi sổ, chỉ kế toán/quản lý', () => {
+      const db = fresh(); R._balance(db, 'hv1', 2000000, 'Thử', '', 'x');
+      throws(() => R.refundBalance(db, ACC, 'hv1', { amount: 3000000, method: 'Tiền mặt' }), /vượt quá/);
+      throws(() => R.refundBalance(db, ACC, 'hv1', { amount: 1000, method: 'Bitcoin' }), /Hình thức/);
+      throws(() => R.refundBalance(db, ENR, 'hv1', { amount: 1000, method: 'Tiền mặt' }), /không có quyền/);
+      R.refundBalance(db, ACC, 'hv1', { amount: 500000, method: 'Chuyển khoản', note: 'hoàn' });
+      eq(R.by(db, 'students', 'hv1').balance, 1500000, 'Số dư'); eq(db.ledger.length, 2, 'Số dòng sổ'); eq(db.ledger[1].balanceAfter, 1500000, 'Số dư sau');
+    }],
+    ['VOID', 'Hủy phiếu thu: giữ lịch sử, trả lại số dư, đăng ký quay về Chờ đóng phí nếu dưới 50%', () => {
+      const db = fresh(), c = mkClass(db); fill(db, c, 1, false); const e = db.enrollments[0], cur = () => R.by(db, 'enrollments', e.id);
+      const p = R.addPayment(db, ACC, e.id, { amount: e.fee / 2, method: 'Tiền mặt' }); eq(cur().status, 'Đã xác nhận');
+      throws(() => R.voidPayment(db, ACC, p.id, ''), /lý do/); R.voidPayment(db, ACC, p.id, 'Nhập nhầm');
+      eq(cur().status, 'Chờ đóng phí'); eq(R.paid(db, e.id), 0, 'Đã đóng'); eq(db.payments.length, 1, 'Phiếu vẫn được giữ');
+      throws(() => R.voidPayment(db, ACC, p.id, 'x'), /đã bị hủy/);
+      R._balance(db, e.studentId, 1000000, 'Thử', '', 'x'); const q = R.addPayment(db, ACC, e.id, { amount: 1000000, method: 'Số dư' }); eq(R.by(db, 'students', e.studentId).balance, 0);
+      R.voidPayment(db, ACC, q.id, 'Nhầm'); eq(R.by(db, 'students', e.studentId).balance, 1000000, 'Số dư được trả lại');
+    }],
+    ['RESCHED', 'Đổi một buổi học: lưu lịch sử; từ chối khi trùng giáo viên/học viên, buổi đã học, ngày quá khứ', () => {
+      const db = fresh(), a = mkClass(db), b = mkClass(db, { course: 'co3', branch: 'br2', s: { roomId: 'br2r1', teacherId: 'gv3', start: '20:00', end: '21:30' } });
+      db.students.push({ id: 'h', code: 'H', name: 'H', level: 'A1', balance: 0, status: 'Hoạt động' }); R.enroll(db, ENR, 'h', a.id); R.enroll(db, ENR, 'h', b.id);
+      const s = R.sessions(db, a.id)[3], d = U.addDays(s.date, 1), ok = { date: d, start: '18:00', end: '19:30', roomId: 'br1r1', teacherId: 'gv1', reason: 'GV bận' };
+      throws(() => R.rescheduleSession(db, S, s.id, { ...ok, reason: '' }), /lý do/);
+      throws(() => R.rescheduleSession(db, S, s.id, { ...ok, date: '2020-01-01' }), /đã qua/);
+      const day = R.sessions(db, b.id)[0].date;
+      throws(() => R.rescheduleSession(db, S, s.id, { ...ok, date: day, start: '20:00', end: '21:30', roomId: 'br1r2', teacherId: 'gv3' }), /giáo viên/);
+      throws(() => R.rescheduleSession(db, S, s.id, { ...ok, date: day, start: '20:30', end: '21:30', roomId: 'br1r2', teacherId: 'gv2' }), /trùng lịch/);
+      R.rescheduleSession(db, S, s.id, ok); const cur = R.by(db, 'sessions', s.id); eq(cur.date, d, 'Ngày mới'); eq(cur.history.length, 1, 'Lịch sử đổi');
+      cur.held = true; throws(() => R.rescheduleSession(db, S, s.id, ok), /đã diễn ra/);
+    }],
+    ['HOLD', 'Giữ chỗ hết hạn: đăng ký chưa đóng đủ ở lớp chưa khai giảng quá 7 ngày tự hủy; lớp đang học thì không', () => {
+      const db = fresh(), c = mkClass(db); fill(db, c, 2, false);
+      db.enrollments[0].createdAt = U.addDays(U.today(), -(CFG.holdDays + 1)); eq(R.expireHolds(db), 1, 'Số đăng ký hết hạn');
+      eq(db.enrollments[0].status, 'Đã hủy'); eq(db.enrollments[1].status, 'Chờ đóng phí');
+      const { db: d2, c: c2 } = active(); fill(d2, c2, 1, false, 300); d2.enrollments[d2.enrollments.length - 1].createdAt = U.addDays(U.today(), -30);
+      eq(R.expireHolds(d2), 0, 'Lớp đang học không bị hủy giữ chỗ');
+    }],
+    ['ATT-EDIT', 'Sửa điểm danh cũ: giáo viên chỉ trong 7 ngày; quản lý sau đó phải ghi lý do; lưu lịch sử thay đổi', () => {
+      const { db, c } = active(); db.enrollments.forEach((e) => { e.createdAt = U.addDays(U.today(), -90); });
+      const sid = R.sessions(db, c.id)[0].id; R.by(db, 'sessions', sid).date = U.addDays(U.today(), -1);
+      const all = (st) => R.attendees(db, sid).map((a) => ({ enrollmentId: a.e.id, status: st }));
+      R.markAttendance(db, TCH, sid, all('Có mặt')); R.by(db, 'sessions', sid).date = U.addDays(U.today(), -(CFG.attendanceEditDays + 3));
+      throws(() => R.markAttendance(db, TCH, sid, all('Vắng')), /quá \d+ ngày/);
+      throws(() => R.markAttendance(db, S, sid, all('Vắng')), /lý do/);
+      R.markAttendance(db, S, sid, all('Vắng'), 'Nhập nhầm ban đầu');
+      const rec = db.attendance.find((x) => x.sessionId === sid); eq(rec.status, 'Vắng'); eq(rec.history.length, 1, 'Lịch sử sửa'); eq(rec.history[0].reason, 'Nhập nhầm ban đầu');
+    }],
+    ['TERM', 'Đợt đào tạo phải kéo dài đúng 3 tháng', () => {
+      const db = fresh(), base = { code: 'Q9-30', name: 'Đợt thử', start: '2030-01-01' };
+      throws(() => R.saveMaster(db, S, 'terms', null, { ...base, end: '2030-04-01' }), /đúng 3 tháng/);
+      R.saveMaster(db, S, 'terms', null, { ...base, end: '2030-03-31' }); eq(db.terms.length, 3, 'Số đợt');
+    }],
+    ['AUDIT', 'Nhật ký thao tác ghi ai đã đổi gì (giá trị trước/sau)', () => {
+      const db = fresh(), snap = () => JSON.parse(JSON.stringify(db));
+      let b = snap(); R.createClass(db, S, { courseId: 'co2', branchId: 'br1', termId: db.terms[1].id });
+      const e1 = recordAudit(db, b, S, 'Tạo lớp'); eq(e1.summary.some((x) => x.includes('Lớp: +1')), true, 'Tóm tắt thêm lớp'); eq(e1.by, S.name);
+      b = snap(); R.by(db, 'students', 'hv1').name = 'Tên mới';
+      const e2 = recordAudit(db, b, S, 'Sửa học viên'); eq(e2.details[0].fields.name[1], 'Tên mới', 'Giá trị sau'); eq(e2.details[0].fields.name[0] !== 'Tên mới', true, 'Giá trị trước');
+      eq(recordAudit(db, snap(), S, 'Không đổi gì'), null, 'Không ghi khi không có thay đổi'); eq(db.audit.length, 2, 'Số mục nhật ký');
     }],
   ];
 

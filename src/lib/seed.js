@@ -45,7 +45,7 @@ const Seed = {
       { id: 'u5', username: 'gv2', password: '123456', name: teachers[1].name, role: 'teacher', title: 'Giáo viên', teacherId: 'gv2' },
     ];
     return { meta: { receiptSeq: 0, version: 1 }, users, branches, rooms, courses, terms: Seed.terms(), teachers, students,
-      classes: [], sessions: [], enrollments: [], payments: [], attendance: [], requests: [], reservations: [], leads: [] };
+      classes: [], sessions: [], enrollments: [], payments: [], attendance: [], requests: [], reservations: [], leads: [], ledger: [], audit: [] };
   },
 
   /* Tạo lớp hoàn chỉnh: tạo → xếp lịch → mở đăng ký */

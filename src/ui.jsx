@@ -81,7 +81,7 @@ export function Form({ title, children, onSubmit, ok = 'Lưu', lg, confirm, cele
   const submit = (e) => {
     e.preventDefault(); if (!onSubmit) return;
     if (confirm && !asking) { setErr(''); setAsking(true); return; }
-    try { const msg = onSubmit(new FormData(e.target)); closeModal(); if (commit()) { toast(msg || 'Đã lưu', 'ok'); if (celebrate) confetti(); if (onDone) onDone(); } }
+    try { const msg = onSubmit(new FormData(e.target)); closeModal(); if (commit(msg || title)) { toast(msg || 'Đã lưu', 'ok'); if (celebrate) confetti(); if (onDone) onDone(); } }
     catch (x) { setErr(x.message); setAsking(false); }
   };
   return (
@@ -105,3 +105,16 @@ export function Form({ title, children, onSubmit, ok = 'Lưu', lg, confirm, cele
   );
 }
 export const Row2 = ({ children }) => <div className="grid gap-x-3.5 sm:grid-cols-2">{children}</div>;
+
+export const PAGE_SIZE = 15;
+/* Phân trang: dùng const { rows, pager } = paginate(list, page, setPage) */
+export function paginate(list, page, setPage, size = PAGE_SIZE) {
+  const pages = Math.max(1, Math.ceil(list.length / size)), cur = Math.min(page, pages);
+  const pager = (
+    <div className="mb-5 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500">
+      <span>{list.length} bản ghi · trang {cur}/{pages}</span>
+      <div className="flex gap-1.5"><Btn v="ghost" sm disabled={cur <= 1} onClick={() => setPage(cur - 1)}>‹ Trước</Btn><Btn v="ghost" sm disabled={cur >= pages} onClick={() => setPage(cur + 1)}>Sau ›</Btn></div>
+    </div>
+  );
+  return { rows: list.slice((cur - 1) * size, cur * size), pager };
+}

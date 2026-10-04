@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { CountUp } from '../fx.jsx';
-import { useAsk, Btn, LinkBtn, Badge, Card, Note, H3, Bar, Meter, Table, In, Sel, Filter } from '../ui.jsx';
+import { paginate, useAsk, Btn, LinkBtn, Badge, Card, Note, H3, Bar, Meter, Table, In, Sel, Filter } from '../ui.jsx';
 import { useStore } from '../store.jsx';
 import { R, U, CFG } from '../lib/rules.js';
 import { by, vnd, dmy, TYPE, ROLE, reqDesc, enLabel, canViewClass } from '../lib/util.js';
-import { FinishForm, NewClassForm, ClassEditForm, ScheduleForm, EnrollForm, PayForm, ReserveForm, TransferForm, MakeupForm, RejectForm } from '../forms.jsx';
+import { CancelForm, RescheduleForm, VoidForm, RefundForm, FinishForm, NewClassForm, ClassEditForm, ScheduleForm, EnrollForm, PayForm, ReserveForm, TransferForm, MakeupForm, RejectForm } from '../forms.jsx';
 
 export const Head = ({ title, children }) => <div className="mb-5 flex flex-wrap items-center gap-2.5"><h1 className="bg-gradient-to-r from-slate-900 to-indigo-700 bg-clip-text text-2xl font-extrabold tracking-tight text-transparent">{title}</h1><div className="flex-1" />{children}</div>;
 const Stu = ({ id }) => { const { db } = useStore(); const s = by(db, 'students', id); return <>{s.name} <small className="text-slate-500">{s.code}</small></>; };
@@ -116,7 +116,7 @@ export function ClassDetail({ id }) {
         return <tr key={e.id}><td><Stu id={e.studentId} /></td><td><Badge t={e.status} /></td><td className="text-right">{vnd(e.fee)}</td><td className="text-right">{vnd(R.paid(db, e.id))}</td><td className="text-right">{vnd(live ? R.due(db, e) : 0)}</td><td>{R.can(user, 'pay') && live && R.due(db, e) > 0 && <Btn sm onClick={() => openModal(<PayForm eid={e.id} />)}>Thu phí</Btn>}</td></tr>;
       })} />
       <H3>Các buổi học ({ss.length})</H3>
-      <Table head={['Buổi', 'Ngày', 'Thứ', 'Giờ', 'Phòng', 'Giáo viên', 'Trạng thái']} rows={ss.map((s) => <tr key={s.id}><td>{s.no}</td><td>{dmy(s.date)}</td><td>{U.DOW[U.dow(s.date)]}</td><td>{s.start}-{s.end}</td><td>{by(db, 'rooms', s.roomId).name}</td><td>{by(db, 'teachers', s.teacherId).name}</td><td>{s.held ? <Badge t="Đã học" /> : s.date < U.today() ? <Badge t="Chưa điểm danh" c="red" /> : <Badge t="Sắp tới" />}</td></tr>)} />
+      <Table head={['Buổi', 'Ngày', 'Thứ', 'Giờ', 'Phòng', 'Giáo viên', 'Trạng thái', '']} rows={ss.map((s) => <tr key={s.id}><td>{s.no}</td><td>{dmy(s.date)}</td><td>{U.DOW[U.dow(s.date)]}</td><td>{s.start}-{s.end}</td><td>{by(db, 'rooms', s.roomId).name}</td><td>{by(db, 'teachers', s.teacherId).name}</td><td><div className="flex flex-wrap gap-1">{s.held ? <Badge t="Đã học" /> : s.date < U.today() ? <Badge t="Chưa điểm danh" c="red" /> : <Badge t="Sắp tới" />}{s.history && s.history.length > 0 && <span title={`Đổi lần cuối: ${s.history[s.history.length - 1].reason}`}><Badge t="Đã đổi" c="amber" /></span>}</div></td><td>{k && !s.held && ['Mở đăng ký', 'Đang học'].includes(c.status) && <Btn v="ghost" sm onClick={() => openModal(<RescheduleForm sid={s.id} />)}>Đổi buổi</Btn>}</td></tr>)} />
     </>
   );
 }
@@ -141,6 +141,7 @@ export function Enrollments() {
               {canReq && e.status === 'Đã xác nhận' && <Btn v="ghost" sm onClick={() => openModal(<ReserveForm eid={e.id} />)}>Bảo lưu</Btn>}
               {canReq && live && <Btn v="ghost" sm onClick={() => openModal(<TransferForm eid={e.id} />)}>Chuyển lớp</Btn>}
               {canReq && e.status === 'Đã xác nhận' && <Btn v="ghost" sm onClick={() => openModal(<MakeupForm eid={e.id} />)}>Học bù</Btn>}
+              {canReq && live && <Btn v="ghost" sm onClick={() => openModal(<CancelForm eid={e.id} />)}>Hủy đăng ký</Btn>}
             </div></td></tr>
         );
       })} />
@@ -150,14 +151,36 @@ export function Enrollments() {
 
 export function Payments() {
   const { db, user, openModal } = useStore();
-  const debts = db.enrollments.filter((e) => R.COLLECTIBLE.includes(e.status) && R.due(db, e) > 0), pays = db.payments.slice().reverse().slice(0, 60), can = R.can(user, 'pay');
+  const [q, setQ] = useState(''), [from, setFrom] = useState(''), [to, setTo] = useState(''), [showVoid, setShowVoid] = useState(true), [page, setPage] = useState(1);
+  const can = R.can(user, 'pay');
+  const debts = db.enrollments.filter((e) => R.COLLECTIBLE.includes(e.status) && R.due(db, e) > 0);
+  const filtered = db.payments.slice().reverse().filter((p) => (showVoid || !p.voided) && (!from || p.date >= from) && (!to || p.date <= to)
+    && (!q || `${p.no} ${by(db, 'students', p.studentId).name} ${by(db, 'students', p.studentId).code}`.toLowerCase().includes(q.toLowerCase())));
+  const { rows, pager } = paginate(filtered, page, setPage);
+  const withBalance = db.students.filter((s) => s.balance > 0);
   return (
     <>
       <Head title="Học phí" />
       <H3>Công nợ cần thu ({debts.length})</H3>
       <Table head={['Học viên', 'Lớp', 'Học phí', 'Đã đóng', 'Còn nợ', 'Trạng thái', '']} right={[2, 3, 4]} rows={debts.map((e) => <tr key={e.id}><td><Stu id={e.studentId} /></td><td>{by(db, 'classes', e.classId).code}</td><td className="text-right">{vnd(e.fee)}</td><td className="text-right">{vnd(R.paid(db, e.id))}</td><td className="text-right font-bold">{vnd(R.due(db, e))}</td><td><Badge t={e.status} /></td><td>{can && <Btn sm onClick={() => openModal(<PayForm eid={e.id} />)}>Thu phí</Btn>}</td></tr>)} />
-      <H3>Phiếu thu gần đây</H3>
-      <Table head={['Số phiếu', 'Ngày', 'Học viên', 'Lớp', 'Hình thức', 'Số tiền', 'Người thu']} right={[5]} rows={pays.map((p) => <tr key={p.id}><td>{p.no}</td><td>{dmy(p.date)}</td><td><Stu id={p.studentId} /></td><td>{by(db, 'classes', by(db, 'enrollments', p.enrollmentId).classId).code}</td><td>{p.method}{p.note && <><br /><Muted>{p.note}</Muted></>}</td><td className="text-right">{vnd(p.amount)}</td><td>{p.by}</td></tr>)} />
+      {withBalance.length > 0 && <>
+        <H3>Học viên còn số dư (chưa hoàn)</H3>
+        <Table head={['Học viên', 'Số dư', '']} right={[1]} rows={withBalance.map((s) => <tr key={s.id}><td><Stu id={s.id} /></td><td className="text-right font-bold">{vnd(s.balance)}</td><td>{can && <Btn v="ghost" sm onClick={() => openModal(<RefundForm studentId={s.id} />)}>Hoàn tiền</Btn>}</td></tr>)} />
+      </>}
+      <H3>Phiếu thu</H3>
+      <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
+        <In className="max-w-xs" placeholder="Tìm số phiếu / học viên…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+        <label className="flex items-center gap-1.5 text-sm text-slate-500">Từ <In type="date" className="w-auto" value={from} onChange={(e) => { setFrom(e.target.value); setPage(1); }} /></label>
+        <label className="flex items-center gap-1.5 text-sm text-slate-500">đến <In type="date" className="w-auto" value={to} onChange={(e) => { setTo(e.target.value); setPage(1); }} /></label>
+        <label className="flex items-center gap-1.5 text-sm text-slate-500"><input type="checkbox" checked={showVoid} onChange={(e) => setShowVoid(e.target.checked)} /> Hiện phiếu đã hủy</label>
+      </div>
+      <Table head={['Số phiếu', 'Ngày', 'Học viên', 'Lớp', 'Hình thức', 'Số tiền', 'Người thu', '']} right={[5]} rows={rows.map((p) => (
+        <tr key={p.id} className={p.voided ? 'text-slate-400' : ''}><td className={p.voided ? 'line-through' : ''}>{p.no}</td><td>{dmy(p.date)}</td><td><Stu id={p.studentId} /></td><td>{by(db, 'classes', by(db, 'enrollments', p.enrollmentId).classId).code}</td>
+          <td>{p.method}{p.note && <><br /><Muted>{p.note}</Muted></>}{p.voided && <><br /><Badge t="Đã hủy" c="red" /> <Muted>{p.voidReason} ({p.voidBy}, {dmy(p.voidAt)})</Muted></>}</td>
+          <td className={`text-right ${p.voided ? 'line-through' : ''}`}>{vnd(p.amount)}</td><td>{p.by}</td>
+          <td>{can && !p.voided && ['Thu', 'Trừ số dư'].includes(p.type) && <Btn v="ghost" sm onClick={() => openModal(<VoidForm pid={p.id} />)}>Hủy phiếu</Btn>}</td></tr>
+      ))} />
+      {pager}
     </>
   );
 }
@@ -171,7 +194,7 @@ export function Requests() {
     <>
       <Head title="Bảo lưu · Chuyển lớp · Học bù" />
       <Note>Tạo yêu cầu từ trang <b>Đăng ký học</b>. Chỉ <b>Quản lý đào tạo</b> được duyệt; khi duyệt, hệ thống kiểm tra lại toàn bộ điều kiện và hoàn tác nếu có lỗi.</Note>
-      <div className="mb-3.5 flex flex-wrap gap-2.5"><Filter value={rt} onChange={(e) => setRt(e.target.value)} ph="Mọi loại" options={Object.entries(TYPE)} /><Filter value={rs} onChange={(e) => setRs(e.target.value)} ph="Mọi trạng thái" options={statuses(['Chờ duyệt', 'Đã duyệt', 'Từ chối'])} /></div>
+      <div className="mb-3.5 flex flex-wrap gap-2.5"><Filter value={rt} onChange={(e) => setRt(e.target.value)} ph="Mọi loại" options={Object.entries(TYPE)} /><Filter value={rs} onChange={(e) => setRs(e.target.value)} ph="Mọi trạng thái" options={statuses(['Chờ duyệt', 'Đã duyệt', 'Từ chối', 'Đã hủy'])} /></div>
       <Table head={['Loại', 'Học viên', 'Nội dung', 'Lý do', 'Người tạo', 'Trạng thái / kết quả', '']} rows={rows.map((r) => (
         <tr key={r.id}><td><b>{TYPE[r.type]}</b><br /><Muted>{dmy(r.createdAt)}</Muted></td><td><Stu id={r.studentId} /></td><td>{reqDesc(db, r)}</td><td>{r.reason}</td><td>{r.createdBy}</td>
           <td><Badge t={r.status} />{r.result && <><br /><small>{r.result}</small></>}{r.status === 'Từ chối' && <><br /><small>{r.note}</small></>}</td>
@@ -186,23 +209,36 @@ export function Requests() {
 /* ---------------- Điểm danh ---------------- */
 export function Attendance() {
   const { db, user, act } = useStore();
-  const [pick, setPick] = useState(null), [draft, setDraft] = useState({});
-  const today = U.today(), from = U.addDays(today, -45);
+  const today = U.today();
+  const [from, setFrom] = useState(U.addDays(today, -45)), [to, setTo] = useState(today), [pick, setPick] = useState(null), [draft, setDraft] = useState({}), [reason, setReason] = useState('');
   const attendable = (s) => { const st = by(db, 'classes', s.classId).status; return st === 'Đang học' || (st === 'Kết thúc' && user.role === 'manager'); };
-  const list = db.sessions.filter((s) => s.date <= today && s.date >= from && attendable(s) && (user.role !== 'teacher' || s.teacherId === user.teacherId)).sort((a, b) => b.date.localeCompare(a.date) || b.start.localeCompare(a.start));
-  if (!list.length) return <><Head title="Điểm danh" /><Note>Chưa có buổi học nào cần điểm danh.</Note></>;
+  const list = db.sessions.filter((s) => s.date <= today && s.date >= from && s.date <= to && attendable(s) && (user.role !== 'teacher' || s.teacherId === user.teacherId)).sort((a, b) => b.date.localeCompare(a.date) || b.start.localeCompare(a.start));
+  const filters = (
+    <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
+      <label className="flex items-center gap-1.5 text-sm text-slate-500">Từ ngày <In type="date" className="w-auto" value={from} max={to} onChange={(e) => { setFrom(e.target.value); setPick(null); }} /></label>
+      <label className="flex items-center gap-1.5 text-sm text-slate-500">đến <In type="date" className="w-auto" value={to} max={today} onChange={(e) => { setTo(e.target.value); setPick(null); }} /></label>
+    </div>
+  );
+  if (!list.length) return <><Head title="Điểm danh" />{filters}<Note>Không có buổi học nào cần điểm danh trong khoảng thời gian này (chỉ lớp đang học).</Note></>;
   const sid = list.some((s) => s.id === pick) ? pick : list[0].id, s = by(db, 'sessions', sid), rows = R.attendees(db, sid);
+  const old = s.held && s.date < U.addDays(today, -CFG.attendanceEditDays);
   const val = (e) => draft[`${sid}:${e.id}`] ?? (db.attendance.find((x) => x.sessionId === sid && x.enrollmentId === e.id) || {}).status ?? 'Có mặt';
-  const save = () => act(() => { R.markAttendance(db, user, sid, rows.map(({ e }) => ({ enrollmentId: e.id, status: val(e) }))); setDraft({}); }, 'Đã lưu điểm danh');
+  const save = () => act(() => { R.markAttendance(db, user, sid, rows.map(({ e }) => ({ enrollmentId: e.id, status: val(e) })), reason); setDraft({}); setReason(''); }, 'Đã lưu điểm danh');
   return (
     <>
       <Head title="Điểm danh" />
-      <div className="mb-3.5"><Sel className="max-w-md" value={sid} onChange={(e) => { setPick(e.target.value); setDraft({}); }} options={list.map((x) => [x.id, `${dmy(x.date)} ${x.start} · ${by(db, 'classes', x.classId).code} · buổi ${x.no}${x.held ? ' ✔' : ''}`])} /></div>
-      <Table head={['Học viên', 'Ghi chú', 'Có mặt', 'Vắng']} rows={rows.map(({ e, makeup }) => (
-        <tr key={e.id}><td><Stu id={e.studentId} /></td><td>{makeup && <Badge t="Học bù" />}</td>
-          {['Có mặt', 'Vắng'].map((v) => <td key={v}><input type="radio" name={`st_${e.id}`} checked={val(e) === v} onChange={() => setDraft({ ...draft, [`${sid}:${e.id}`]: v })} /></td>)}</tr>
-      ))} />
-      <Btn onClick={save}>{s.held ? 'Cập nhật điểm danh' : 'Lưu điểm danh'}</Btn>
+      {filters}
+      <div className="mb-3.5"><Sel className="max-w-md" value={sid} onChange={(e) => { setPick(e.target.value); setDraft({}); setReason(''); }} options={list.map((x) => [x.id, `${dmy(x.date)} ${x.start} · ${by(db, 'classes', x.classId).code} · buổi ${x.no}${x.held ? ' ✔' : ''}`])} /></div>
+      {old && <Note>Buổi học đã quá {CFG.attendanceEditDays} ngày: {user.role === 'teacher' ? 'chỉ Quản lý đào tạo được sửa điểm danh.' : 'sửa điểm danh cần nhập lý do và mọi thay đổi được lưu lịch sử.'}</Note>}
+      <Table head={['Học viên', 'Ghi chú', 'Có mặt', 'Vắng']} rows={rows.map(({ e, makeup }) => {
+        const rec = db.attendance.find((x) => x.sessionId === sid && x.enrollmentId === e.id);
+        return (
+          <tr key={e.id}><td><Stu id={e.studentId} /></td><td><div className="flex gap-1">{makeup && <Badge t="Học bù" />}{rec && rec.history && rec.history.length > 0 && <span title={rec.history.map((h) => `${dmy(h.at)} ${h.by}: ${h.from} → ${h.to}${h.reason ? ' (' + h.reason + ')' : ''}`).join('\n')}><Badge t="Đã sửa" c="amber" /></span>}</div></td>
+            {['Có mặt', 'Vắng'].map((v) => <td key={v}><input type="radio" name={`st_${e.id}`} checked={val(e) === v} onChange={() => setDraft({ ...draft, [`${sid}:${e.id}`]: v })} /></td>)}</tr>
+        );
+      })} />
+      {old && user.role !== 'teacher' && <div className="mb-3 max-w-md"><In placeholder="Lý do sửa điểm danh (bắt buộc)" value={reason} onChange={(e) => setReason(e.target.value)} /></div>}
+      <Btn disabled={old && user.role === 'teacher'} onClick={save}>{s.held ? 'Cập nhật điểm danh' : 'Lưu điểm danh'}</Btn>
     </>
   );
 }
@@ -237,24 +273,63 @@ export function Leads() {
   return (
     <>
       <Head title="Yêu cầu tư vấn" />
-      <Table head={['Ngày', 'Họ tên', 'Điện thoại', 'Khóa quan tâm', 'Ghi chú', 'Trạng thái']} rows={db.leads.slice().reverse().map((l) => <tr key={l.id}><td>{dmy(l.createdAt)}</td><td>{l.name}</td><td>{l.phone}</td><td>{l.course}</td><td>{l.note}</td><td><Sel className="w-auto" value={l.status} onChange={(e) => { l.status = e.target.value; commit(); }} options={statuses(['Mới', 'Đã liên hệ', 'Đã ghi danh'])} /></td></tr>)} />
+      <Table head={['Ngày', 'Họ tên', 'Điện thoại', 'Khóa quan tâm', 'Ghi chú', 'Trạng thái']} rows={db.leads.slice().reverse().map((l) => <tr key={l.id}><td>{dmy(l.createdAt)}</td><td>{l.name}</td><td>{l.phone}</td><td>{l.course}</td><td>{l.note}</td><td><Sel className="w-auto" value={l.status} onChange={(e) => { l.status = e.target.value; commit('Cập nhật trạng thái tư vấn'); }} options={statuses(['Mới', 'Đã liên hệ', 'Đã ghi danh'])} /></td></tr>)} />
     </>
   );
 }
 
 export function Reports() {
   const { db } = useStore();
-  const r = R.report(db), maxRev = Math.max(1, ...r.byBranch.map((x) => x.revenue)), cls = db.classes.filter((c) => ['Mở đăng ký', 'Đang học'].includes(c.status));
+  const [termId, setTermId] = useState(''), [from, setFrom] = useState(''), [to, setTo] = useState('');
+  const r = R.report(db, { termId, from, to }), maxRev = Math.max(1, ...r.byBranch.map((x) => x.revenue)), cls = db.classes.filter((c) => ['Mở đăng ký', 'Đang học'].includes(c.status) && (!termId || c.termId === termId));
+  const exportCsv = () => {
+    const rowsCsv = [['Chi nhánh', 'Số lớp', 'Đang học', 'Số đăng ký', 'Học viên (không trùng)', 'Doanh thu đã thu', 'Còn phải thu'], ...r.byBranch.map((x) => [x.b.name, x.classes, x.running, x.students, x.uniqueStudents, x.revenue, x.receivable]), [], ['Khóa học', 'Số lớp', 'Số đăng ký', 'Học viên (không trùng)'], ...r.byCourse.map((x) => [x.co.name, x.classes, x.students, x.uniqueStudents])];
+    const csv = '\ufeff' + rowsCsv.map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = `bao-cao-${U.today()}.csv`; a.click(); URL.revokeObjectURL(a.href);
+  };
   return (
     <>
-      <Head title="Báo cáo"><Btn v="ghost" className="no-print" onClick={() => window.print()}>In báo cáo</Btn></Head>
+      <Head title="Báo cáo"><Btn v="ghost" className="no-print" onClick={exportCsv}>⬇ Xuất CSV</Btn><Btn v="ghost" className="no-print" onClick={() => window.print()}>In báo cáo</Btn></Head>
+      <div className="no-print mb-4 flex flex-wrap items-center gap-2.5">
+        <Filter value={termId} onChange={(e) => setTermId(e.target.value)} ph="Tất cả các đợt" options={db.terms.map((t) => [t.id, t.name])} />
+        <label className="flex items-center gap-1.5 text-sm text-slate-500">Thu từ <In type="date" className="w-auto" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+        <label className="flex items-center gap-1.5 text-sm text-slate-500">đến <In type="date" className="w-auto" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+        <span className="text-sm text-slate-500">Khoảng ngày áp dụng cho doanh thu, hoàn tiền và chuyên cần.</span>
+      </div>
       <H3>Theo chi nhánh</H3>
-      <Table head={['Chi nhánh', 'Số lớp', 'Đang học', 'Học viên', 'Doanh thu đã thu', '', 'Còn phải thu']} right={[4, 6]} rows={r.byBranch.map((x) => <tr key={x.b.id}><td><b>{x.b.name}</b></td><td>{x.classes}</td><td>{x.running}</td><td>{x.students}</td><td className="text-right">{vnd(x.revenue)}</td><td className="w-36"><Bar v={x.revenue} max={maxRev} /></td><td className="text-right">{vnd(x.receivable)}</td></tr>)} />
+      <Table head={['Chi nhánh', 'Số lớp', 'Đang học', 'Số đăng ký', 'Học viên (không trùng)', 'Doanh thu đã thu', '', 'Còn phải thu']} right={[5, 7]} rows={r.byBranch.map((x) => <tr key={x.b.id}><td><b>{x.b.name}</b></td><td>{x.classes}</td><td>{x.running}</td><td>{x.students}</td><td>{x.uniqueStudents}</td><td className="text-right">{vnd(x.revenue)}</td><td className="w-36"><Bar v={x.revenue} max={maxRev} /></td><td className="text-right">{vnd(x.receivable)}</td></tr>)} />
       <H3>Theo khóa học</H3>
-      <Table head={['Khóa học', 'Số lớp', 'Học viên']} rows={r.byCourse.map((x) => <tr key={x.co.id}><td>{x.co.name}</td><td>{x.classes}</td><td>{x.students}</td></tr>)} />
+      <Table head={['Khóa học', 'Số lớp', 'Số đăng ký', 'Học viên (không trùng)']} rows={r.byCourse.map((x) => <tr key={x.co.id}><td>{x.co.name}</td><td>{x.classes}</td><td>{x.students}</td><td>{x.uniqueStudents}</td></tr>)} />
       <H3>Mức độ lấp đầy lớp đang mở</H3>
       <Table head={['Lớp', 'Sĩ số', 'Tỷ lệ lấp đầy']} rows={cls.map((c) => { const n = R.live(db, c.id).length; return <tr key={c.id}><td>{c.code}</td><td>{n}/{CFG.maxStudents}</td><td className="w-64"><Bar v={n} max={CFG.maxStudents} /></td></tr>; })} />
-      <Card>Tỷ lệ chuyên cần toàn hệ thống: <b>{r.attRate == null ? '—' : Math.round(r.attRate * 100) + '%'}</b></Card>
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>Học viên không trùng đang học: <b>{r.uniqueStudents}</b></Card>
+        <Card>Tỷ lệ chuyên cần: <b>{r.attRate == null ? '—' : Math.round(r.attRate * 100) + '%'}</b></Card>
+        <Card>Đã hoàn tiền: <b>{vnd(r.refunded)}</b></Card>
+      </div>
+    </>
+  );
+}
+
+/* ---------------- Nhật ký thao tác ---------------- */
+export function AuditPage() {
+  const { db } = useStore();
+  const [q, setQ] = useState(''), [page, setPage] = useState(1);
+  const list = (db.audit || []).slice().reverse().filter((a) => !q || `${a.by} ${a.action} ${a.summary.join(' ')}`.toLowerCase().includes(q.toLowerCase()));
+  const { rows, pager } = paginate(list, page, setPage, 12);
+  const COL = { students: 'Học viên', classes: 'Lớp', sessions: 'Buổi học', enrollments: 'Đăng ký', payments: 'Phiếu thu', requests: 'Yêu cầu', users: 'Tài khoản', rooms: 'Phòng', courses: 'Khóa học', terms: 'Đợt', teachers: 'Giáo viên', branches: 'Chi nhánh', attendance: 'Điểm danh', reservations: 'Bảo lưu', leads: 'Tư vấn', ledger: 'Sổ số dư' };
+  return (
+    <>
+      <Head title="Nhật ký thao tác" />
+      <Note>Mỗi lần lưu dữ liệu, hệ thống ghi lại <b>ai</b> đã làm gì, <b>lúc nào</b> và giá trị <b>trước → sau</b>. Giữ tối đa 500 mục gần nhất.</Note>
+      <div className="mb-3.5"><In className="max-w-sm" placeholder="Tìm theo người thực hiện, thao tác…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} /></div>
+      <Table head={['Thời gian', 'Người thực hiện', 'Thao tác', 'Thay đổi']} rows={rows.map((a) => (
+        <tr key={a.id}><td className="whitespace-nowrap">{new Date(a.at).toLocaleString('vi-VN')}</td><td>{a.by}<br /><Muted>{ROLE[a.role] || 'Khách'}</Muted></td><td className="font-semibold">{a.action}</td>
+          <td><div className="flex flex-wrap gap-1">{a.summary.map((s) => <Badge key={s} t={s} c="blue" />)}</div>
+            {a.details.length > 0 && <details className="mt-1.5 text-xs"><summary className="cursor-pointer text-indigo-600">Chi tiết ({a.details.length})</summary>
+              <ul className="mt-1 space-y-0.5">{a.details.map((d, i) => <li key={i}><b>{COL[d.col] || d.col}</b> {d.op} <b>{d.label}</b>{d.fields && Object.entries(d.fields).map(([k, [o, n]]) => <span key={k} className="ml-2 text-slate-500">{k}: <s>{o || '∅'}</s> → {n || '∅'}</span>)}</li>)}</ul></details>}</td></tr>
+      ))} />
+      {pager}
     </>
   );
 }
